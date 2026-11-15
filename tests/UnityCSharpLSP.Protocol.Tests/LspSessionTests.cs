@@ -299,4 +299,49 @@ public sealed class LspSessionTests
         await client.NotifyAsync(Methods.ExitName);
         await server.WaitForExitAsync();
     }
+
+    [Fact]
+    public async Task FindReferences_CrossAssembly_FindsDeclarationAndUsages()
+    {
+        var (server, client) = CreateSessionPair();
+        client.StartListening();
+
+        var dummyPath = GetDummyProjectPath();
+        await client.InvokeWithParameterObjectAsync<InitializeResult>(
+            Methods.InitializeName,
+            new InitializeParams
+            {
+                RootUri = new Uri(dummyPath),
+                Capabilities = new ClientCapabilities(),
+            });
+
+        var gameConfigUri = new Uri(Path.Combine(dummyPath, "Assets", "Scripts", "Data", "GameConfig.cs"));
+        var playerControllerUri = new Uri(Path.Combine(dummyPath, "Assets", "Scripts", "PlayerController.cs"));
+
+        // Position on "MaxHealth" property in GameConfig.cs (line 10, char 22: "public int MaxHealth => ...")
+        var locations = await client.InvokeWithParameterObjectAsync<Microsoft.VisualStudio.LanguageServer.Protocol.Location[]?>(
+            Methods.TextDocumentReferencesName,
+            new ReferenceParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = gameConfigUri },
+                Position = new Position(10, 22),
+                Context = new ReferenceContext { IncludeDeclaration = true },
+            });
+
+        Assert.NotNull(locations);
+        Assert.True(locations.Length >= 2, $"Expected at least 2 locations (declaration + usage), got {locations.Length}");
+
+        // 1. Must contain declaration in GameConfig.cs
+        Assert.Contains(locations, loc =>
+            string.Equals(loc.Uri.LocalPath, gameConfigUri.LocalPath, StringComparison.OrdinalIgnoreCase) &&
+            loc.Range.Start.Line == 10);
+
+        // 2. Must contain cross-assembly usage in PlayerController.cs
+        Assert.Contains(locations, loc =>
+            string.Equals(loc.Uri.LocalPath, playerControllerUri.LocalPath, StringComparison.OrdinalIgnoreCase));
+
+        await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
+        await client.NotifyAsync(Methods.ExitName);
+        await server.WaitForExitAsync();
+    }
 }

@@ -48,6 +48,9 @@ public sealed class LspJsonRpcSession : IDisposable
 
         var completionHandler = new CompletionHandler(() => _workspaceManager);
         _rpc.AddLocalRpcTarget(completionHandler);
+
+        var referencesHandler = new ReferencesHandler(() => _workspaceManager);
+        _rpc.AddLocalRpcTarget(referencesHandler);
     }
 
     public void Start()
@@ -97,6 +100,7 @@ public sealed class LspJsonRpcSession : IDisposable
                 },
                 HoverProvider = true,
                 DefinitionProvider = true,
+                ReferencesProvider = true,
                 CompletionProvider = new CompletionOptions
                 {
                     TriggerCharacters = new[] { "." },
