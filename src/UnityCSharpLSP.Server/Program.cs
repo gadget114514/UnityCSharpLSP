@@ -14,13 +14,15 @@ LLM / AI AGENT INTEGRATION (OpenCode, Claude Code, Cursor, etc.):
     {
       ""lsp"": {
         ""unity-csharp"": {
-          ""command"": [""UnityCSharpLSP.Server.exe"", ""--stdio""],
+          ""command"": [""<path/to/UnityCSharpLSP.Server.exe>"", ""--stdio""],
           ""extensions"": ["".cs""]
         }
       }
     }
 
-  Run `UnityCSharpLSP.Server --print-config` to output this JSON snippet directly.";
+  Note: Replace `<path/to/UnityCSharpLSP.Server.exe>` with the actual binary path
+  (or simply ""UnityCSharpLSP.Server.exe"" if installed to your system/user PATH).
+  Alternatively, run `UnityCSharpLSP.Server --print-config` to auto-generate this with your resolved path.";
 
     public static async Task<int> Main(string[] args)
     {

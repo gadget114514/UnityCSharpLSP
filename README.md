@@ -63,21 +63,25 @@ The compiled single-file binary will be located at `./publish/UnityCSharpLSP.Ser
 
 ## 🛠 Editor & Agent Configurations
 
+> **💡 Command Path Placeholder**:
+> In all configuration examples below, replace `<path/to/UnityCSharpLSP.Server.exe>` with the actual path to your executable (e.g. `C:/Users/username/AppData/Local/Programs/UnityCSharpLSP/UnityCSharpLSP.Server.exe`).
+> If you used the Windows Installer, the directory is automatically registered in your `PATH`, so you can simply use `"UnityCSharpLSP.Server.exe"`.
+
 ### 1. OpenCode (AI Agent)
 
-You can automatically generate the LSP configuration snippet by running:
+You can automatically generate the ready-to-use configuration snippet with your exact resolved path by running:
 
 ```bash
 UnityCSharpLSP.Server.exe --print-config
 ```
 
-Or manually add the following block to your `opencode.json` (or `~/.config/opencode/opencode.json`):
+Or manually configure your `opencode.json` (or `~/.config/opencode/opencode.json`):
 
 ```json
 {
   "lsp": {
     "unity-csharp": {
-      "command": ["UnityCSharpLSP.Server.exe", "--stdio"],
+      "command": ["<path/to/UnityCSharpLSP.Server.exe>", "--stdio"],
       "extensions": [".cs"]
     }
   }
@@ -95,7 +99,7 @@ local configs = require('lspconfig.configs')
 if not configs.unity_csharp_lsp then
   configs.unity_csharp_lsp = {
     default_config = {
-      cmd = { 'UnityCSharpLSP.Server.exe', '--stdio' },
+      cmd = { '<path/to/UnityCSharpLSP.Server.exe>', '--stdio' },
       filetypes = { 'cs' },
       root_dir = lspconfig.util.root_pattern('ProjectSettings/ProjectVersion.txt', 'Assets'),
       settings = {},
@@ -108,11 +112,11 @@ lspconfig.unity_csharp_lsp.setup({})
 
 ### 3. VS Code
 
-You can use the generic [LSP Client Extension](https://marketplace.visualstudio.com/items?itemName=realsungho.simple-lsp-client) or configure a custom task, pointing the server command to:
+You can use the generic [LSP Client Extension](https://marketplace.visualstudio.com/items?itemName=realsungho.simple-lsp-client) or configure a custom task:
 
 ```json
 {
-  "command": "UnityCSharpLSP.Server.exe",
+  "command": "<path/to/UnityCSharpLSP.Server.exe>",
   "args": ["--stdio"]
 }
 ```
@@ -127,7 +131,7 @@ name = "c-sharp"
 language-servers = [ "unity-csharp-lsp" ]
 
 [language-server.unity-csharp-lsp]
-command = "UnityCSharpLSP.Server.exe"
+command = "<path/to/UnityCSharpLSP.Server.exe>"
 args = ["--stdio"]
 ```
 
