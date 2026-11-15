@@ -119,6 +119,19 @@ The compiled single-file binary will be located at `./publish/UnityCSharpLSP.Ser
 
 ---
 
+## ⚡ Quick Setup
+
+The shortest path from zero to a working setup—let your LLM (AI agent) do the wiring:
+
+1. **Install** UnityCSharpLSP using the Windows Installer above. The installer adds the install directory to your User `PATH`.
+2. **Ask your LLM to find it on `PATH`**, for example:
+   > Search `PATH` for `UnityCSharpLSP.Server.exe` and configure UnityCSharpLSP as my C# language server.
+3. The LLM locates the executable (or runs `UnityCSharpLSP.Server.exe --print-config`) and writes the appropriate LSP configuration for your editor/agent, so `unitycsharplsp` is ready to use.
+
+> On Windows you can verify the binary is on `PATH` with `where UnityCSharpLSP.Server.exe` (or `which UnityCSharpLSP.Server.exe` on other shells).
+
+---
+
 ## 🛠 Editor & Agent Configurations
 
 > **💡 Command Path Placeholder**:
