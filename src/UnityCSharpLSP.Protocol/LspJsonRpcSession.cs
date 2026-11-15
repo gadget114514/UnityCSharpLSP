@@ -16,6 +16,7 @@ public sealed class LspJsonRpcSession : IDisposable
     private readonly TaskCompletionSource<int> _exitTcs = new();
 
     private UnityWorkspaceManager? _workspaceManager;
+    private WorkspaceWatcher? _workspaceWatcher;
     private DiagnosticsHandler? _diagnosticsHandler;
     private bool _isShutdown;
 
@@ -51,6 +52,9 @@ public sealed class LspJsonRpcSession : IDisposable
 
         var referencesHandler = new ReferencesHandler(() => _workspaceManager);
         _rpc.AddLocalRpcTarget(referencesHandler);
+
+        var watchedFilesHandler = new WatchedFilesHandler(() => _workspaceManager);
+        _rpc.AddLocalRpcTarget(watchedFilesHandler);
     }
 
     public void Start()
@@ -80,6 +84,7 @@ public sealed class LspJsonRpcSession : IDisposable
             try
             {
                 _workspaceManager = UnityWorkspaceManager.Create(rootPath);
+                _workspaceWatcher = new WorkspaceWatcher(_workspaceManager, rootPath);
                 _diagnosticsHandler = new DiagnosticsHandler(_rpc, _workspaceManager);
             }
             catch
@@ -120,6 +125,8 @@ public sealed class LspJsonRpcSession : IDisposable
     public object? Shutdown()
     {
         _isShutdown = true;
+        _workspaceWatcher?.Dispose();
+        _workspaceWatcher = null;
         _workspaceManager?.Dispose();
         _workspaceManager = null;
         _diagnosticsHandler = null;
@@ -135,6 +142,7 @@ public sealed class LspJsonRpcSession : IDisposable
 
     public void Dispose()
     {
+        _workspaceWatcher?.Dispose();
         _workspaceManager?.Dispose();
         _rpc.Dispose();
         _input.Dispose();

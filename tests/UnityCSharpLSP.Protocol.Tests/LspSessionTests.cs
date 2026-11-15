@@ -344,4 +344,161 @@ public sealed class LspSessionTests
         await client.NotifyAsync(Methods.ExitName);
         await server.WaitForExitAsync();
     }
+
+    [Fact]
+    public async Task PublishDiagnostics_SuppressesCS0649_ForSerializeField()
+    {
+        var (server, client) = CreateSessionPair();
+
+        var diagnosticsTcs = new TaskCompletionSource<PublishDiagnosticParams>();
+        client.AddLocalRpcTarget(new ClientCallbackTarget(diagnosticsTcs));
+        client.StartListening();
+
+        var dummyPath = GetDummyProjectPath();
+        await client.InvokeWithParameterObjectAsync<InitializeResult>(
+            Methods.InitializeName,
+            new InitializeParams
+            {
+                RootUri = new Uri(dummyPath),
+                Capabilities = new ClientCapabilities(),
+            });
+
+        var testUri = new Uri(Path.Combine(dummyPath, "Assets", "Scripts", "Data", "SuppressTest.cs"));
+        // unassignedWithSerialize has [SerializeField], so CS0649 should be suppressed.
+        // unassignedWithoutSerialize does NOT have [SerializeField], so CS0649 must be reported.
+        var code = @"
+using UnityEngine;
+
+namespace Game.Data
+{
+    public class SuppressTest : MonoBehaviour
+    {
+        [SerializeField] private int unassignedWithSerialize;
+        private int unassignedWithoutSerialize;
+
+        public int GetVal() => unassignedWithoutSerialize;
+    }
+}
+";
+
+        await client.NotifyWithParameterObjectAsync(
+            Methods.TextDocumentDidOpenName,
+            new DidOpenTextDocumentParams
+            {
+                TextDocument = new TextDocumentItem
+                {
+                    Uri = testUri,
+                    LanguageId = "csharp",
+                    Version = 1,
+                    Text = code,
+                },
+            });
+
+        var completed = await Task.WhenAny(diagnosticsTcs.Task, Task.Delay(5000));
+        Assert.Same(diagnosticsTcs.Task, completed);
+
+        var diagParams = await diagnosticsTcs.Task;
+        Assert.NotNull(diagParams);
+
+        // unassignedWithSerialize should NOT trigger CS0649
+        Assert.DoesNotContain(diagParams.Diagnostics, d =>
+            d.Code?.ToString() == "CS0649" && d.Message.Contains("unassignedWithSerialize"));
+
+        await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
+        await client.NotifyAsync(Methods.ExitName);
+        await server.WaitForExitAsync();
+    }
+
+    [Fact]
+    public async Task WatchedFiles_CreatedAndDeleted_UpdatesSolution()
+    {
+        var (server, client) = CreateSessionPair();
+        client.StartListening();
+
+        var dummyPath = GetDummyProjectPath();
+        await client.InvokeWithParameterObjectAsync<InitializeResult>(
+            Methods.InitializeName,
+            new InitializeParams
+            {
+                RootUri = new Uri(dummyPath),
+                Capabilities = new ClientCapabilities(),
+            });
+
+        var newFile = Path.Combine(dummyPath, "Assets", "Scripts", "DynamicNewFile.cs");
+        File.WriteAllText(newFile, "namespace Game.Runtime { public class DynamicNewFile {} }");
+
+        try
+        {
+            // Send Created notification
+            await client.NotifyWithParameterObjectAsync(
+                Methods.WorkspaceDidChangeWatchedFilesName,
+                new DidChangeWatchedFilesParams
+                {
+                    Changes =
+                    [
+                        new FileEvent
+                        {
+                            Uri = new Uri(newFile),
+                            FileChangeType = FileChangeType.Created,
+                        },
+                    ],
+                });
+
+            Microsoft.CodeAnalysis.Document? doc = null;
+            for (int i = 0; i < 20; i++)
+            {
+                doc = server.WorkspaceManager?.GetDocument(newFile);
+                if (doc is not null) break;
+                await Task.Delay(50);
+            }
+            Assert.NotNull(doc);
+
+            // Send Deleted notification
+            await client.NotifyWithParameterObjectAsync(
+                Methods.WorkspaceDidChangeWatchedFilesName,
+                new DidChangeWatchedFilesParams
+                {
+                    Changes =
+                    [
+                        new FileEvent
+                        {
+                            Uri = new Uri(newFile),
+                            FileChangeType = FileChangeType.Deleted,
+                        },
+                    ],
+                });
+
+            // Wait briefly for the notification to be dispatched and processed
+            Microsoft.CodeAnalysis.Document? removedDoc = null;
+            for (int i = 0; i < 20; i++)
+            {
+                removedDoc = server.WorkspaceManager?.GetDocument(newFile);
+                if (removedDoc is null) break;
+                await Task.Delay(50);
+            }
+            Assert.Null(removedDoc);
+
+            await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
+            await client.NotifyAsync(Methods.ExitName);
+            await server.WaitForExitAsync();
+        }
+        finally
+        {
+            server.Dispose();
+            client.Dispose();
+
+            for (int i = 0; i < 5 && File.Exists(newFile); i++)
+            {
+                try
+                {
+                    File.Delete(newFile);
+                    break;
+                }
+                catch (IOException)
+                {
+                    await Task.Delay(50);
+                }
+            }
+        }
+    }
 }

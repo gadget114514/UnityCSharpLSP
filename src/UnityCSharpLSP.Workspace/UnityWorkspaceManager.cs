@@ -356,6 +356,46 @@ public sealed class UnityWorkspaceManager : IDisposable
     }
 
     /// <summary>
+    /// Removes a document completely from the Roslyn solution (e.g. when deleted on disk).
+    /// </summary>
+    public bool RemoveDocument(string filePath)
+    {
+        var full = Path.GetFullPath(filePath);
+        lock (_solutionLock)
+        {
+            if (!_documentIdsByPath.TryRemove(full, out var docId))
+            {
+                return false;
+            }
+
+            var newSol = CurrentSolution.RemoveDocument(docId);
+            return _workspace.TryApplyChanges(newSol);
+        }
+    }
+
+    /// <summary>
+    /// Adds or refreshes a file from disk into the Roslyn solution.
+    /// </summary>
+    public DocumentId? AddOrRefreshDiskFile(string filePath)
+    {
+        var full = Path.GetFullPath(filePath);
+        if (!File.Exists(full))
+        {
+            return null;
+        }
+
+        try
+        {
+            var text = File.ReadAllText(full);
+            return OpenOrUpdateDocument(full, text);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Gets all compiler diagnostics for a document.
     /// </summary>
     public async Task<IEnumerable<Diagnostic>> GetDiagnosticsAsync(string filePath, CancellationToken ct = default)

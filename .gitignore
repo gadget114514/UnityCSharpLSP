@@ -1,6 +1,7 @@
 # .NET / C# ignores
 [Bb]in/
 [Oo]bj/
+artifacts/
 .vs/
 *.user
 *.suo

@@ -1,5 +1,6 @@
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.Semantics.Analyzers;
 using UnityCSharpLSP.Workspace;
 using RoslynDiagnostic = Microsoft.CodeAnalysis.Diagnostic;
 using RoslynSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
@@ -7,7 +8,8 @@ using RoslynSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
 namespace UnityCSharpLSP.Protocol.Handlers;
 
 /// <summary>
-/// Converts Roslyn diagnostics to LSP diagnostics and publishes them to the client.
+/// Converts Roslyn diagnostics to LSP diagnostics, filters suppressed Unity warnings,
+/// and publishes them to the client.
 /// </summary>
 public sealed class DiagnosticsHandler
 {
@@ -22,8 +24,21 @@ public sealed class DiagnosticsHandler
 
     public async Task PublishDiagnosticsAsync(Uri uri, string filePath, CancellationToken ct = default)
     {
+        var doc = _workspaceManager.GetDocument(filePath);
+        var semanticModel = doc is not null ? await doc.GetSemanticModelAsync(ct).ConfigureAwait(false) : null;
         var diagnostics = await _workspaceManager.GetDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
-        var lspDiagnostics = ConvertDiagnostics(diagnostics);
+
+        // Apply Unity-specific diagnostic suppressors (e.g. CS0649 for [SerializeField])
+        var filteredDiagnostics = diagnostics.Where(d =>
+        {
+            if (semanticModel is not null && SerializeFieldSuppressor.ShouldSuppress(d, semanticModel))
+            {
+                return false;
+            }
+            return true;
+        });
+
+        var lspDiagnostics = ConvertDiagnostics(filteredDiagnostics);
 
         await _rpc.NotifyWithParameterObjectAsync(
             Methods.TextDocumentPublishDiagnosticsName,
