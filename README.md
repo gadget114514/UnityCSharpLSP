@@ -65,7 +65,13 @@ The compiled single-file binary will be located at `./publish/UnityCSharpLSP.Ser
 
 ### 1. OpenCode (AI Agent)
 
-Add the following to your `opencode.json` (or `~/.config/opencode/opencode.json`):
+You can automatically generate the LSP configuration snippet by running:
+
+```bash
+UnityCSharpLSP.Server.exe --print-config
+```
+
+Or manually add the following block to your `opencode.json` (or `~/.config/opencode/opencode.json`):
 
 ```json
 {
