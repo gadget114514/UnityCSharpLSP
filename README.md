@@ -32,13 +32,19 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
 
 ## 📥 Installation
 
-### Method 1: Download Pre-built Binary (Recommended)
+### Method 1: Windows Installer (Recommended)
 
 1. Go to the [Releases](https://github.com/gadget114514/UnityCSharpLSP/releases) page.
-2. Download the latest `UnityCSharpLSP-v*-win-x64.zip`.
-3. Extract the archive and place `UnityCSharpLSP.Server.exe` in any directory on your system `PATH` (or reference its full path directly in your editor config).
+2. Download and run `UnityCSharpLSP-v*-Setup.exe`.
+3. Follow the wizard. It will install the server and **automatically add the installation directory to your User `PATH`**.
+4. Open a new terminal, and `UnityCSharpLSP.Server.exe` will be directly accessible from anywhere.
 
-### Method 2: Build from Source
+### Method 2: Portable Zip Archive
+
+1. Download `UnityCSharpLSP-v*-win-x64.zip` from [Releases](https://github.com/gadget114514/UnityCSharpLSP/releases).
+2. Extract the archive and place `UnityCSharpLSP.Server.exe` into any directory on your system `PATH`.
+
+### Method 3: Build from Source
 
 Ensure [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) is installed.
 
