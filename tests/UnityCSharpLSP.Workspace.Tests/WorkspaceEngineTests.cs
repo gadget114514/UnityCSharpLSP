@@ -33,6 +33,30 @@ public class WorkspaceEngineTests
     }
 
     [Fact]
+    public void Locate_EditorInstanceJson_ResolvesEditorAndManaged()
+    {
+        using var temp = new TempDirectory();
+        var editorDataDir = Path.Combine(temp.Path, "Editor", "Data");
+        Directory.CreateDirectory(Path.Combine(editorDataDir, "Managed", "UnityEngine"));
+
+        temp.Write("Library/EditorInstance.json",
+            $$"""
+            {
+              "process_id" : 1234,
+              "version" : "6000.3.16f1",
+              "app_path" : "{{temp.Path.Replace('\\', '/')}}/Editor/Unity.exe",
+              "app_contents_path" : "{{editorDataDir.Replace('\\', '/')}}"
+            }
+            """);
+
+        var result = UnityInstallationLocator.Locate(temp.Path);
+
+        Assert.Equal(UnityLocationSource.EditorInstance, result.Source);
+        Assert.Equal(Path.Combine(temp.Path, "Editor", "Data", "Managed"), result.ManagedDirectory);
+        Assert.Null(result.Warning);
+    }
+
+    [Fact]
     public void Locate_NothingFound_DoesNotThrowAndWarns()
     {
         using var temp = new TempDirectory();

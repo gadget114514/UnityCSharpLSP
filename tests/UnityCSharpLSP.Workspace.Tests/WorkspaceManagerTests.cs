@@ -103,4 +103,20 @@ namespace Game.Data
         var errors = diagnostics.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error).ToList();
         Assert.Empty(errors);
     }
+
+    [Fact]
+    public async Task PlayerController_Diagnostics_ChecksMissingReferences()
+    {
+        var dummyPath = GetDummyProjectPath();
+        using var manager = UnityWorkspaceManager.Create(dummyPath, explicitEditorPath: null);
+
+        var playerPath = Path.Combine(dummyPath, "Assets", "Scripts", "PlayerController.cs");
+        var diagnostics = await manager.GetDiagnosticsAsync(playerPath);
+        var errors = diagnostics.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error).ToList();
+        foreach (var err in errors)
+        {
+            Console.WriteLine($"Error: {err.Id} - {err.GetMessage()}");
+        }
+        Assert.Empty(errors);
+    }
 }

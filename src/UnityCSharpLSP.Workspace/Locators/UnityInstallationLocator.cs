@@ -7,6 +7,7 @@ public enum UnityLocationSource
 {
     None,
     ExplicitPath,
+    EditorInstance,
     EditorsJson,
     StandardPath,
     ProjectLibrary,
@@ -93,6 +94,20 @@ public static class UnityInstallationLocator
             }
         }
 
+        // Check active/recent editor instance recorded in Library/EditorInstance.json
+        if (editorsJsonPathOverride is null && TryGetEditorInstance(projectRoot, out var contentsPath, out var appPath, out _))
+        {
+            var instanceCandidate = contentsPath ?? appPath;
+            if (!string.IsNullOrWhiteSpace(instanceCandidate))
+            {
+                var root = TryResolveEditorRoot(instanceCandidate);
+                if (root is not null)
+                {
+                    return Found(root, UnityLocationSource.EditorInstance);
+                }
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(unityVersion))
         {
             foreach (var candidate in EnumerateEditorsJsonLocations(unityVersion, editorsJsonPathOverride))
@@ -110,6 +125,26 @@ public static class UnityInstallationLocator
                 if (root is not null)
                 {
                     return Found(root, UnityLocationSource.StandardPath);
+                }
+            }
+        }
+
+        // Fallback: If exact version not found and no override is set, look for any installed Unity Editor in Hub or standard paths
+        if (editorsJsonPathOverride is null)
+        {
+            foreach (var candidate in EnumerateAnyInstalledEditorCandidates())
+            {
+                var root = TryResolveEditorRoot(candidate);
+                if (root is not null)
+                {
+                    var warning = !string.IsNullOrWhiteSpace(unityVersion)
+                        ? $"Unity Editor {unityVersion} not found; falling back to installed Editor at {root}."
+                        : null;
+                    return new UnityInstallationResult(
+                        EditorPath: root,
+                        ManagedDirectory: Path.Combine(root, "Data", "Managed"),
+                        Source: UnityLocationSource.StandardPath,
+                        Warning: warning);
                 }
             }
         }
@@ -162,6 +197,16 @@ public static class UnityInstallationLocator
                 {
                     return Path.GetFullPath(candidate);
                 }
+
+                if (Directory.Exists(Path.Combine(candidate, "Managed")))
+                {
+                    var parent = Path.GetDirectoryName(candidate);
+                    if (parent is not null && Directory.Exists(Path.Combine(parent, "Data", "Managed")))
+                    {
+                        return Path.GetFullPath(parent);
+                    }
+                    return Path.GetFullPath(candidate);
+                }
             }
         }
         catch (ArgumentException)
@@ -172,13 +217,59 @@ public static class UnityInstallationLocator
         return null;
     }
 
+    /// <summary>
+    /// Reads the active or recent Unity Editor instance from <c>Library/EditorInstance.json</c>.
+    /// </summary>
+    public static bool TryGetEditorInstance(string projectRoot, out string? appContentsPath, out string? appPath, out string? version)
+    {
+        appContentsPath = null;
+        appPath = null;
+        version = null;
+
+        var path = Path.Combine(projectRoot, "Library", "EditorInstance.json");
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var doc = JsonDocument.Parse(stream, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+            var root = doc.RootElement;
+            if (root.TryGetProperty("app_contents_path", out var contentsElem) && contentsElem.ValueKind == JsonValueKind.String)
+            {
+                appContentsPath = contentsElem.GetString();
+            }
+            if (root.TryGetProperty("app_path", out var appElem) && appElem.ValueKind == JsonValueKind.String)
+            {
+                appPath = appElem.GetString();
+            }
+            if (root.TryGetProperty("version", out var verElem) && verElem.ValueKind == JsonValueKind.String)
+            {
+                version = verElem.GetString();
+            }
+
+            return !string.IsNullOrWhiteSpace(appContentsPath) || !string.IsNullOrWhiteSpace(appPath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static UnityInstallationResult Found(string editorRoot, UnityLocationSource source) =>
         new(EditorPath: editorRoot,
             ManagedDirectory: Path.Combine(editorRoot, "Data", "Managed"),
             Source: source,
             Warning: null);
 
-    private static IEnumerable<string> EnumerateEditorsJsonLocations(string version, string? overridePath)
+    private static IEnumerable<string> EnumerateEditorsJsonLocations(string? version, string? overridePath)
     {
         var path = overridePath ?? GetDefaultEditorsJsonPath();
         if (path is null || !File.Exists(path))
@@ -205,11 +296,14 @@ public static class UnityInstallationLocator
         {
             foreach (var entry in EnumerateEditorEntries(document.RootElement))
             {
-                if (!entry.TryGetProperty("version", out var versionElement) ||
-                    versionElement.ValueKind != JsonValueKind.String ||
-                    !string.Equals(versionElement.GetString(), version, StringComparison.OrdinalIgnoreCase))
+                if (version is not null)
                 {
-                    continue;
+                    if (!entry.TryGetProperty("version", out var versionElement) ||
+                        versionElement.ValueKind != JsonValueKind.String ||
+                        !string.Equals(versionElement.GetString(), version, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
                 }
 
                 if (!entry.TryGetProperty("location", out var location))
@@ -230,6 +324,60 @@ public static class UnityInstallationLocator
                             yield return item.GetString()!;
                         }
                     }
+                }
+            }
+        }
+    }
+
+    public static IEnumerable<string> EnumerateAnyInstalledEditorCandidates(string? editorsJsonPathOverride = null)
+    {
+        // 1. From editors.json (any version)
+        foreach (var loc in EnumerateEditorsJsonLocations(null, editorsJsonPathOverride))
+        {
+            yield return loc;
+        }
+
+        // 2. From standard Hub directory
+        string? hubEditorDir = null;
+        if (OperatingSystem.IsWindows())
+        {
+            var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            hubEditorDir = Path.Combine(pf, "Unity", "Hub", "Editor");
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            hubEditorDir = Path.Combine("/Applications", "Unity", "Hub", "Editor");
+        }
+        else
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(home))
+            {
+                hubEditorDir = Path.Combine(home, "Unity", "Hub", "Editor");
+            }
+        }
+
+        if (hubEditorDir is not null && Directory.Exists(hubEditorDir))
+        {
+            IEnumerable<string> subdirs = [];
+            try
+            {
+                subdirs = Directory.EnumerateDirectories(hubEditorDir)
+                    .OrderByDescending(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase);
+            }
+            catch
+            {
+            }
+
+            foreach (var dir in subdirs)
+            {
+                if (OperatingSystem.IsMacOS())
+                {
+                    yield return Path.Combine(dir, "Unity.app", "Contents");
+                }
+                else
+                {
+                    yield return Path.Combine(dir, "Editor");
                 }
             }
         }

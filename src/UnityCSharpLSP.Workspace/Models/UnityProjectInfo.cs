@@ -9,6 +9,8 @@ public sealed class UnityProjectInfo
 
     public string? UnityVersion { get; init; }
 
+    public string? EditorPath { get; init; }
+
     public string? ManagedDllDirectory { get; init; }
 
     public required IReadOnlyList<AsmdefFile> AsmdefFiles { get; init; }

@@ -31,6 +31,7 @@ public static class UnityProjectLoader
         {
             ProjectRootPath = root,
             UnityVersion = unityVersion,
+            EditorPath = installation.EditorPath,
             ManagedDllDirectory = installation.ManagedDirectory,
             AsmdefFiles = asmdefs,
             Packages = packages,

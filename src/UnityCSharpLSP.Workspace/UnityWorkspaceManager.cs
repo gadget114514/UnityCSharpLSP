@@ -159,69 +159,254 @@ public sealed class UnityWorkspaceManager : IDisposable
     private List<MetadataReference> CollectCommonReferences()
     {
         var refs = new List<MetadataReference>();
+        var loadedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // 1. Basic CLR / BCL references from current runtime
-        var bclAssemblies = new[]
+        void AddReference(string path)
         {
-            typeof(object).Assembly,                           // System.Private.CoreLib
-            typeof(Console).Assembly,                          // System.Console
-            typeof(Enumerable).Assembly,                       // System.Linq
-            typeof(List<>).Assembly,                           // System.Collections
-            typeof(Task).Assembly,                             // System.Threading.Tasks
-            typeof(System.ComponentModel.Component).Assembly,  // System.ComponentModel.Primitives
-        };
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            var fileName = Path.GetFileName(path);
+            if (!loadedNames.Add(fileName)) return;
 
-        var bclPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var asm in bclAssemblies)
-        {
-            if (!string.IsNullOrEmpty(asm.Location) && File.Exists(asm.Location))
-            {
-                bclPaths.Add(asm.Location);
-            }
-        }
-
-        // Also add System.Runtime.dll from the same folder as CoreLib
-        var coreLibDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
-        if (!string.IsNullOrEmpty(coreLibDir) && Directory.Exists(coreLibDir))
-        {
-            var systemRuntime = Path.Combine(coreLibDir, "System.Runtime.dll");
-            if (File.Exists(systemRuntime)) bclPaths.Add(systemRuntime);
-
-            var netstandard = Path.Combine(coreLibDir, "netstandard.dll");
-            if (File.Exists(netstandard)) bclPaths.Add(netstandard);
-        }
-
-        foreach (var path in bclPaths)
-        {
             var meta = GetOrCreateMetadataReference(path);
             if (meta is not null) refs.Add(meta);
         }
 
-        // 2. Unity Managed DLLs (UnityEngine.dll, UnityEngine.CoreModule.dll, etc.)
-        if (!string.IsNullOrEmpty(ProjectInfo.ManagedDllDirectory) &&
-            Directory.Exists(ProjectInfo.ManagedDllDirectory))
+        // 1. Resolve BCL / CoreLib directory (works in single-file published apps, test runs, and CLI runs)
+        var coreLibDir = ResolveCoreLibDirectory();
+        if (!string.IsNullOrEmpty(coreLibDir) && Directory.Exists(coreLibDir))
         {
-            var unityDlls = Directory.EnumerateFiles(
-                ProjectInfo.ManagedDllDirectory,
-                "UnityEngine*.dll",
-                SearchOption.AllDirectories);
-
-            foreach (var dll in unityDlls)
-            {
-                var meta = GetOrCreateMetadataReference(dll);
-                if (meta is not null) refs.Add(meta);
-            }
+            AddBclReferences(coreLibDir, AddReference);
         }
+
+        // 2. Ensure netstandard.dll (2.1.0.0) is referenced (crucial for Unity assemblies compiled against netstandard 2.1)
+        if (!loadedNames.Contains("netstandard.dll"))
+        {
+            AddFallbackNetStandardReferences(AddReference);
+        }
+
+        // 3. Unity Managed DLLs (UnityEngine.dll, UnityEngine.CoreModule.dll, etc.)
+        AddUnityManagedReferences(AddReference);
 
         return refs;
     }
 
+    private static string? ResolveCoreLibDirectory()
+    {
+        // 1. Try from TRUSTED_PLATFORM_ASSEMBLIES (works in single-file published apps)
+        if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is string tpa)
+        {
+            foreach (var path in tpa.Split(Path.PathSeparator))
+            {
+                if (string.Equals(Path.GetFileName(path), "System.Private.CoreLib.dll", StringComparison.OrdinalIgnoreCase))
+                {
+                    var dir = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                    {
+                        return dir;
+                    }
+                }
+            }
+        }
+
+        // 2. Try from typeof(object).Assembly.Location (non-single-file run)
+        try
+        {
+            var loc = typeof(object).Assembly.Location;
+            if (!string.IsNullOrEmpty(loc))
+            {
+                var dir = Path.GetDirectoryName(loc);
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                {
+                    return dir;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        // 3. Try standard dotnet shared directory
+        var sharedRoots = new List<string>();
+        if (OperatingSystem.IsWindows())
+        {
+            var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            if (!string.IsNullOrEmpty(pf))
+            {
+                sharedRoots.Add(Path.Combine(pf, "dotnet", "shared", "Microsoft.NETCore.App"));
+            }
+        }
+        else
+        {
+            sharedRoots.Add("/usr/share/dotnet/shared/Microsoft.NETCore.App");
+            sharedRoots.Add("/usr/local/share/dotnet/shared/Microsoft.NETCore.App");
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(home))
+            {
+                sharedRoots.Add(Path.Combine(home, ".dotnet", "shared", "Microsoft.NETCore.App"));
+            }
+        }
+
+        foreach (var sharedRoot in sharedRoots)
+        {
+            if (Directory.Exists(sharedRoot))
+            {
+                try
+                {
+                    var latest = Directory.EnumerateDirectories(sharedRoot)
+                        .OrderByDescending(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase)
+                        .FirstOrDefault();
+                    if (!string.IsNullOrEmpty(latest) && Directory.Exists(latest))
+                    {
+                        return latest;
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static void AddBclReferences(string coreLibDir, Action<string> addRef)
+    {
+        var coreAssemblies = new[]
+        {
+            "System.Private.CoreLib.dll",
+            "System.Runtime.dll",
+            "netstandard.dll",
+            "mscorlib.dll",
+            "System.dll",
+            "System.Core.dll",
+            "System.Collections.dll",
+            "System.Collections.Concurrent.dll",
+            "System.Collections.NonGeneric.dll",
+            "System.Console.dll",
+            "System.IO.dll",
+            "System.Linq.dll",
+            "System.Memory.dll",
+            "System.Buffers.dll",
+            "System.Numerics.Vectors.dll",
+            "System.ObjectModel.dll",
+            "System.Threading.dll",
+            "System.Threading.Tasks.dll",
+            "System.ComponentModel.Primitives.dll",
+            "System.ComponentModel.TypeConverter.dll",
+        };
+
+        foreach (var asmName in coreAssemblies)
+        {
+            var p = Path.Combine(coreLibDir, asmName);
+            if (File.Exists(p))
+            {
+                addRef(p);
+            }
+        }
+    }
+
+    private void AddFallbackNetStandardReferences(Action<string> addRef)
+    {
+        // 1. Check Unity Editor NetStandard directory
+        var netStandardCandidates = new List<string>();
+        if (!string.IsNullOrEmpty(ProjectInfo.EditorPath))
+        {
+            netStandardCandidates.Add(Path.Combine(ProjectInfo.EditorPath, "Data", "NetStandard", "ref", "2.1.0", "netstandard.dll"));
+            netStandardCandidates.Add(Path.Combine(ProjectInfo.EditorPath, "Contents", "NetStandard", "ref", "2.1.0", "netstandard.dll"));
+            netStandardCandidates.Add(Path.Combine(ProjectInfo.EditorPath, "NetStandard", "ref", "2.1.0", "netstandard.dll"));
+        }
+        if (!string.IsNullOrEmpty(ProjectInfo.ManagedDllDirectory))
+        {
+            var parent = Path.GetDirectoryName(ProjectInfo.ManagedDllDirectory);
+            if (!string.IsNullOrEmpty(parent))
+            {
+                netStandardCandidates.Add(Path.Combine(parent, "NetStandard", "ref", "2.1.0", "netstandard.dll"));
+            }
+        }
+
+        foreach (var candidate in netStandardCandidates)
+        {
+            if (File.Exists(candidate))
+            {
+                addRef(candidate);
+                return;
+            }
+        }
+
+        // 2. Check .NET SDK targeting pack
+        var packBases = new List<string>();
+        if (OperatingSystem.IsWindows())
+        {
+            var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            if (!string.IsNullOrEmpty(pf)) packBases.Add(Path.Combine(pf, "dotnet", "packs", "NETStandard.Library.Ref"));
+        }
+        var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+        if (!string.IsNullOrEmpty(dotnetRoot)) packBases.Add(Path.Combine(dotnetRoot, "packs", "NETStandard.Library.Ref"));
+        packBases.Add("/usr/share/dotnet/packs/NETStandard.Library.Ref");
+        packBases.Add("/usr/local/share/dotnet/packs/NETStandard.Library.Ref");
+
+        foreach (var packBase in packBases)
+        {
+            if (!Directory.Exists(packBase)) continue;
+            try
+            {
+                var vDir = Directory.EnumerateDirectories(packBase)
+                    .OrderByDescending(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+                if (vDir != null)
+                {
+                    var p = Path.Combine(vDir, "ref", "netstandard2.1", "netstandard.dll");
+                    if (File.Exists(p))
+                    {
+                        addRef(p);
+                        return;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private void AddUnityManagedReferences(Action<string> addRef)
+    {
+        if (string.IsNullOrEmpty(ProjectInfo.ManagedDllDirectory) ||
+            !Directory.Exists(ProjectInfo.ManagedDllDirectory))
+        {
+            return;
+        }
+
+        var managedDir = ProjectInfo.ManagedDllDirectory;
+        var unitySubDir = Path.Combine(managedDir, "UnityEngine");
+
+        // In modern Unity (2018+), UnityEngine modules reside in Managed/UnityEngine
+        if (Directory.Exists(unitySubDir))
+        {
+            foreach (var dll in Directory.EnumerateFiles(unitySubDir, "UnityEngine*.dll"))
+            {
+                addRef(dll);
+            }
+        }
+        else
+        {
+            foreach (var dll in Directory.EnumerateFiles(managedDir, "UnityEngine*.dll"))
+            {
+                addRef(dll);
+            }
+        }
+    }
+
     private void AddEditorReferences(string managedDir, List<MetadataReference> references)
     {
-        var editorDlls = Directory.EnumerateFiles(
-            managedDir,
-            "UnityEditor*.dll",
-            SearchOption.AllDirectories);
+        var editorDlls = new List<string>();
+        var unitySubDir = Path.Combine(managedDir, "UnityEngine");
+        if (Directory.Exists(unitySubDir))
+        {
+            editorDlls.AddRange(Directory.EnumerateFiles(unitySubDir, "UnityEditor*.dll"));
+        }
+
+        editorDlls.AddRange(Directory.EnumerateFiles(managedDir, "UnityEditor*.dll"));
 
         foreach (var dll in editorDlls)
         {
