@@ -223,4 +223,80 @@ public sealed class LspSessionTests
         await client.NotifyAsync(Methods.ExitName);
         await server.WaitForExitAsync();
     }
+
+    [Fact]
+    public async Task Completion_DotMemberAccess_ReturnsTypeMembers()
+    {
+        var (server, client) = CreateSessionPair();
+        client.StartListening();
+
+        var dummyPath = GetDummyProjectPath();
+        await client.InvokeWithParameterObjectAsync<InitializeResult>(
+            Methods.InitializeName,
+            new InitializeParams
+            {
+                RootUri = new Uri(dummyPath),
+                Capabilities = new ClientCapabilities(),
+            });
+
+        var playerControllerUri = new Uri(Path.Combine(dummyPath, "Assets", "Scripts", "PlayerController.cs"));
+
+        // In PlayerController.cs:
+        // "            return config.MaxHealth;" -> line 11: "return config." is at character 26
+        var items = await client.InvokeWithParameterObjectAsync<CompletionItem[]?>(
+            Methods.TextDocumentCompletionName,
+            new CompletionParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = playerControllerUri },
+                Position = new Position(11, 26),
+            });
+
+        Assert.NotNull(items);
+        Assert.NotEmpty(items);
+        Assert.Contains(items, item => item.Label == "MaxHealth");
+        Assert.Contains(items, item => item.Label == "MoveSpeed");
+
+        await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
+        await client.NotifyAsync(Methods.ExitName);
+        await server.WaitForExitAsync();
+    }
+
+    [Fact]
+    public async Task Completion_MonoBehaviour_SuggestsUnityMessages()
+    {
+        var (server, client) = CreateSessionPair();
+        client.StartListening();
+
+        var dummyPath = GetDummyProjectPath();
+        await client.InvokeWithParameterObjectAsync<InitializeResult>(
+            Methods.InitializeName,
+            new InitializeParams
+            {
+                RootUri = new Uri(dummyPath),
+                Capabilities = new ClientCapabilities(),
+            });
+
+        var playerControllerUri = new Uri(Path.Combine(dummyPath, "Assets", "Scripts", "PlayerController.cs"));
+
+        // Position inside PlayerController class body (e.g. line 8: empty line inside class)
+        var items = await client.InvokeWithParameterObjectAsync<CompletionItem[]?>(
+            Methods.TextDocumentCompletionName,
+            new CompletionParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = playerControllerUri },
+                Position = new Position(8, 8),
+            });
+
+        Assert.NotNull(items);
+        Assert.NotEmpty(items);
+
+        // Verify Unity Magic Methods are suggested with snippet templates
+        Assert.Contains(items, item => item.Label == "Update" && item.Detail!.Contains("Unity Message"));
+        Assert.Contains(items, item => item.Label == "Start" && item.Detail!.Contains("Unity Message"));
+        Assert.Contains(items, item => item.Label == "Awake" && item.Detail!.Contains("Unity Message"));
+
+        await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
+        await client.NotifyAsync(Methods.ExitName);
+        await server.WaitForExitAsync();
+    }
 }
