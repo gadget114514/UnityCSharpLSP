@@ -1,6 +1,7 @@
 # .NET / C# ignores
 [Bb]in/
 [Oo]bj/
+*.bin
 artifacts/
 release-build/
 .vs/

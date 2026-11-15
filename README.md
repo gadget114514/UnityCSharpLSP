@@ -77,6 +77,17 @@ How does **UnityCSharpLSP** compare to existing C# language servers (**OmniSharp
 
 ---
 
+## 📋 Prerequisites
+
+Before running or building **UnityCSharpLSP**, ensure the .NET 8.0 SDK is installed on your machine.
+On Windows, you can install it with a single command via `winget`:
+
+```bash
+winget install Microsoft.DotNet.SDK.8
+```
+
+---
+
 ## 📥 Installation
 
 ### Method 1: Windows Installer (Recommended)
