@@ -139,4 +139,88 @@ public sealed class LspSessionTests
         var exitCode = await server.WaitForExitAsync();
         Assert.Equal(0, exitCode);
     }
+
+    [Fact]
+    public async Task Hover_ReturnsSignature()
+    {
+        var (server, client) = CreateSessionPair();
+        client.StartListening();
+
+        var dummyPath = GetDummyProjectPath();
+        await client.InvokeWithParameterObjectAsync<InitializeResult>(
+            Methods.InitializeName,
+            new InitializeParams
+            {
+                RootUri = new Uri(dummyPath),
+                Capabilities = new ClientCapabilities(),
+            });
+
+        var gameConfigUri = new Uri(Path.Combine(dummyPath, "Assets", "Scripts", "Data", "GameConfig.cs"));
+        var hover = await client.InvokeWithParameterObjectAsync<Hover?>(
+            Methods.TextDocumentHoverName,
+            new TextDocumentPositionParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = gameConfigUri },
+                Position = new Position(5, 26), // on "GameConfig" in "public sealed class GameConfig"
+            });
+
+        Assert.NotNull(hover);
+        MarkupContent? markup = null;
+        if (hover.Contents.Value is MarkupContent mc)
+        {
+            markup = mc;
+        }
+        else if (hover.Contents.Value is Newtonsoft.Json.Linq.JObject jo)
+        {
+            markup = jo.ToObject<MarkupContent>();
+        }
+
+        Assert.NotNull(markup);
+        Assert.Contains("Game.Data.GameConfig", markup.Value);
+
+        await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
+        await client.NotifyAsync(Methods.ExitName);
+        await server.WaitForExitAsync();
+    }
+
+    [Fact]
+    public async Task GotoDefinition_CrossAssembly_NavigatesToDeclaration()
+    {
+        var (server, client) = CreateSessionPair();
+        client.StartListening();
+
+        var dummyPath = GetDummyProjectPath();
+        await client.InvokeWithParameterObjectAsync<InitializeResult>(
+            Methods.InitializeName,
+            new InitializeParams
+            {
+                RootUri = new Uri(dummyPath),
+                Capabilities = new ClientCapabilities(),
+            });
+
+        var playerControllerUri = new Uri(Path.Combine(dummyPath, "Assets", "Scripts", "PlayerController.cs"));
+        var gameConfigUri = new Uri(Path.Combine(dummyPath, "Assets", "Scripts", "Data", "GameConfig.cs"));
+
+        // Ask for definition of "GameConfig" referenced inside PlayerController.cs:
+        // "[SerializeField] private GameConfig config = null!;" -> "GameConfig" starts at character 33
+        var locations = await client.InvokeWithParameterObjectAsync<Microsoft.VisualStudio.LanguageServer.Protocol.Location[]?>(
+            Methods.TextDocumentDefinitionName,
+            new TextDocumentPositionParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = playerControllerUri },
+                Position = new Position(7, 35),
+            });
+
+        Assert.NotNull(locations);
+        Assert.NotEmpty(locations);
+
+        var loc = locations[0];
+        Assert.Equal(gameConfigUri.LocalPath, loc.Uri.LocalPath, ignoreCase: true);
+        // GameConfig is declared on line 5
+        Assert.Equal(5, loc.Range.Start.Line);
+
+        await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
+        await client.NotifyAsync(Methods.ExitName);
+        await server.WaitForExitAsync();
+    }
 }

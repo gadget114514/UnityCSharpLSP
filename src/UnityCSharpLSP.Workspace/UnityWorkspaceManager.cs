@@ -375,6 +375,61 @@ public sealed class UnityWorkspaceManager : IDisposable
         return model.GetDiagnostics(cancellationToken: ct);
     }
 
+    /// <summary>
+    /// Resolves the Roslyn <see cref="ISymbol"/> at the given line and character offset (0-indexed).
+    /// </summary>
+    public async Task<(ISymbol? Symbol, SemanticModel? SemanticModel)> GetSymbolAtPositionAsync(
+        string filePath,
+        int line,
+        int character,
+        CancellationToken ct = default)
+    {
+        var doc = GetDocument(filePath);
+        if (doc is null)
+        {
+            return (null, null);
+        }
+
+        var sourceText = await doc.GetTextAsync(ct).ConfigureAwait(false);
+        if (line < 0 || line >= sourceText.Lines.Count)
+        {
+            return (null, null);
+        }
+
+        var textLine = sourceText.Lines[line];
+        var position = Math.Min(textLine.Start + character, textLine.End);
+
+        var syntaxTree = await doc.GetSyntaxTreeAsync(ct).ConfigureAwait(false);
+        if (syntaxTree is null)
+        {
+            return (null, null);
+        }
+
+        var root = await syntaxTree.GetRootAsync(ct).ConfigureAwait(false);
+        var token = root.FindToken(position);
+        var node = token.Parent;
+        if (node is null)
+        {
+            return (null, null);
+        }
+
+        var semanticModel = await doc.GetSemanticModelAsync(ct).ConfigureAwait(false);
+        if (semanticModel is null)
+        {
+            return (null, null);
+        }
+
+        var symbolInfo = semanticModel.GetSymbolInfo(node, ct);
+        var symbol = symbolInfo.Symbol ?? symbolInfo.CandidateSymbols.FirstOrDefault();
+
+        if (symbol is null)
+        {
+            symbol = semanticModel.GetDeclaredSymbol(node, ct);
+        }
+
+        return (symbol, semanticModel);
+    }
+
     public void Dispose()
     {
         _workspace.Dispose();

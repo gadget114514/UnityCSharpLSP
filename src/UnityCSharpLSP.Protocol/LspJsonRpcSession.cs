@@ -38,6 +38,13 @@ public sealed class LspJsonRpcSession : IDisposable
             () => _workspaceManager,
             () => _diagnosticsHandler);
         _rpc.AddLocalRpcTarget(syncHandler);
+
+        // Register language feature handlers
+        var hoverHandler = new HoverHandler(() => _workspaceManager);
+        _rpc.AddLocalRpcTarget(hoverHandler);
+
+        var definitionHandler = new DefinitionHandler(() => _workspaceManager);
+        _rpc.AddLocalRpcTarget(definitionHandler);
     }
 
     public void Start()
@@ -85,8 +92,8 @@ public sealed class LspJsonRpcSession : IDisposable
                     Change = TextDocumentSyncKind.Full,
                     Save = new SaveOptions { IncludeText = false },
                 },
-                HoverProvider = false,
-                DefinitionProvider = false,
+                HoverProvider = true,
+                DefinitionProvider = true,
             },
         };
     }
