@@ -41,6 +41,42 @@ public sealed class AsmdefGraph
     public AssemblyNode? TryGetAssembly(string name) =>
         Assemblies.TryGetValue(name, out var node) ? node : null;
 
-    public AssemblyNode? TryGetOwningAssembly(string sourceFilePath) =>
-        FileOwnership.TryGetValue(Path.GetFullPath(sourceFilePath), out var name) ? TryGetAssembly(name) : null;
+    public AssemblyNode? TryGetOwningAssembly(string sourceFilePath)
+    {
+        var full = Path.GetFullPath(sourceFilePath);
+        if (FileOwnership.TryGetValue(full, out var name))
+        {
+            return TryGetAssembly(name);
+        }
+
+        // Walk up directory hierarchy to find an assembly node whose RootDirectory or Asmdef DirectoryPath matches
+        var dir = Path.GetDirectoryName(full);
+        while (!string.IsNullOrEmpty(dir))
+        {
+            var match = Assemblies.Values.FirstOrDefault(a =>
+                string.Equals(a.Asmdef?.DirectoryPath, dir, StringComparison.OrdinalIgnoreCase) ||
+                (!a.IsImplicit && string.Equals(a.RootDirectory, dir, StringComparison.OrdinalIgnoreCase)));
+
+            if (match is not null)
+            {
+                return match;
+            }
+
+            var parent = Path.GetDirectoryName(dir);
+            if (parent == dir) break;
+            dir = parent;
+        }
+
+        // Check if inside an Editor folder
+        var editorSegment = Path.DirectorySeparatorChar + "Editor" + Path.DirectorySeparatorChar;
+        var altEditorSegment = Path.AltDirectorySeparatorChar + "Editor" + Path.AltDirectorySeparatorChar;
+        if (full.Contains(editorSegment, StringComparison.OrdinalIgnoreCase) ||
+            full.Contains(altEditorSegment, StringComparison.OrdinalIgnoreCase))
+        {
+            var editorAssembly = TryGetAssembly(AsmdefGraphBuilder.AssemblyCSharpEditorName);
+            if (editorAssembly is not null) return editorAssembly;
+        }
+
+        return TryGetAssembly(AsmdefGraphBuilder.AssemblyCSharpName);
+    }
 }

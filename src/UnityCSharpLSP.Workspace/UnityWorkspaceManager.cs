@@ -399,21 +399,38 @@ public sealed class UnityWorkspaceManager : IDisposable
 
     private void AddEditorReferences(string managedDir, List<MetadataReference> references)
     {
-        var editorDlls = new List<string>();
+        var loadedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var unitySubDir = Path.Combine(managedDir, "UnityEngine");
+
+        // 1. In modern Unity (2018+), modular editor DLLs reside in Managed/UnityEngine
         if (Directory.Exists(unitySubDir))
         {
-            editorDlls.AddRange(Directory.EnumerateFiles(unitySubDir, "UnityEditor*.dll"));
+            foreach (var dll in Directory.EnumerateFiles(unitySubDir, "UnityEditor*.dll"))
+            {
+                var fileName = Path.GetFileName(dll);
+                if (loadedNames.Add(fileName))
+                {
+                    var meta = GetOrCreateMetadataReference(dll);
+                    if (meta is not null && !references.Contains(meta))
+                    {
+                        references.Add(meta);
+                    }
+                }
+            }
         }
 
-        editorDlls.AddRange(Directory.EnumerateFiles(managedDir, "UnityEditor*.dll"));
-
-        foreach (var dll in editorDlls)
+        // 2. Add any additional root editor assemblies (e.g. UnityEditor.Graphs.dll),
+        // but skip monolithic UnityEditor.dll if modular UnityEditor has already been loaded!
+        foreach (var dll in Directory.EnumerateFiles(managedDir, "UnityEditor*.dll"))
         {
-            var meta = GetOrCreateMetadataReference(dll);
-            if (meta is not null && !references.Contains(meta))
+            var fileName = Path.GetFileName(dll);
+            if (loadedNames.Add(fileName))
             {
-                references.Add(meta);
+                var meta = GetOrCreateMetadataReference(dll);
+                if (meta is not null && !references.Contains(meta))
+                {
+                    references.Add(meta);
+                }
             }
         }
     }

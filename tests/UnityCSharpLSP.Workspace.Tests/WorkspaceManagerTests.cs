@@ -119,4 +119,40 @@ namespace Game.Data
         }
         Assert.Empty(errors);
     }
+
+    [Fact]
+    public async Task EditorScript_Diagnostics_NoDuplicateTypeCollisionCS0433()
+    {
+        var dummyPath = GetDummyProjectPath();
+        using var manager = UnityWorkspaceManager.Create(dummyPath, explicitEditorPath: null);
+
+        var editorScriptPath = Path.Combine(dummyPath, "Assets", "Scripts", "Editor", "PlayerControllerEditor.cs");
+        var code = @"
+using UnityEditor;
+using UnityEngine;
+using Game.Runtime;
+
+namespace Game.Editor
+{
+    [CustomEditor(typeof(PlayerController))]
+    public class PlayerControllerEditor : UnityEditor.Editor
+    {
+        public override void OnInspectorGUI()
+        {
+            base.OnInspectorGUI();
+        }
+    }
+}
+";
+        var docId = manager.OpenOrUpdateDocument(editorScriptPath, code);
+        Assert.NotNull(docId);
+
+        var diagnostics = await manager.GetDiagnosticsAsync(editorScriptPath);
+        var errors = diagnostics.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error).ToList();
+        foreach (var err in errors)
+        {
+            Console.WriteLine($"Error: {err.Id} - {err.GetMessage()}");
+        }
+        Assert.Empty(errors);
+    }
 }
