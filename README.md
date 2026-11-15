@@ -30,6 +30,53 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
 
 ---
 
+## ⚖️ Comparison & Trade-offs (Pros & Cons)
+
+How does **UnityCSharpLSP** compare to existing C# language servers (**OmniSharp**, **csharp-ls**, and **VS Code's built-in Roslyn LSP / C# Dev Kit**) when working with Unity projects?
+
+### Comparison Matrix
+
+| Feature / Capability | UnityCSharpLSP (This Project) | OmniSharp (`omnisharp-roslyn`) | `csharp-ls` | VS Code Built-in (Roslyn LSP / C# Dev Kit) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Unity Editor Running Required?** | ❌ **No** (Fully autonomous) | ⚠️ **Yes** (Needs Unity to export `.csproj`) | ⚠️ **Yes** (Needs Unity to export `.csproj`) | ⚠️ **Yes** (Needs Unity to export `.csproj`) |
+| **`.csproj` / `.sln` Files Required?** | ❌ **No** (Direct in-memory Roslyn AST) | ⚠️ **Yes** (Fails if missing/out-of-sync) | ⚠️ **Yes** (Fails if missing/out-of-sync) | ⚠️ **Yes** (Fails if missing/out-of-sync) |
+| **Native `.asmdef` & GUID Resolution** | ✅ **Built-in** (First-class citizen) | ❌ No (Relies on MSBuild projection) | ❌ No (Relies on MSBuild projection) | ❌ No (Relies on MSBuild projection) |
+| **Dynamic File Creation Recognition** | ✅ **Instant** (In-memory file monitor) | ⚠️ Delayed (Must focus Unity Editor) | ⚠️ Delayed (Must focus Unity Editor) | ⚠️ Delayed (Must focus Unity Editor) |
+| **Unity Symbol Auto-Calculation** | ✅ **Automatic** (from `ProjectVersion.txt`) | ⚠️ Brittle (Relies on Unity's export) | ⚠️ Brittle (Relies on Unity's export) | ⚠️ Brittle (Relies on Unity's export) |
+| **`[SerializeField]` CS0649 Suppressor** | ✅ **Built-in** (No false warnings) | ❌ No (Manual `#pragma` required) | ❌ No (Manual `#pragma` required) | ⚠️ Partial (Requires Unity extension) |
+| **MonoBehaviour Message Completions** | ✅ **Built-in** (Snippets for `Update` etc.) | ❌ No | ❌ No | ⚠️ Requires Unity extension |
+| **Headless / CI / AI Agent Ready** | ✅ **Zero-friction** (`--stdio`, `--print-config`) | ❌ Heavy / Requires MSBuild setup | ⚠️ Medium | ❌ Heavy / Requires VS Code host |
+| **General Non-Unity C# Projects** | ❌ **No** (Unity-exclusive) | ✅ **Yes** (Broad .NET ecosystem) | ✅ **Yes** (Broad .NET ecosystem) | ✅ **Yes** (Broad .NET ecosystem) |
+| **Licensing** | ✅ **MIT** (Permissive Open Source) | ✅ **MIT** (Permissive Open Source) | ✅ **MIT** (Permissive Open Source) | ⚠️ Proprietary (Microsoft Visual Studio EULA) |
+
+---
+
+### In-Depth Breakdown
+
+#### 1. UnityCSharpLSP vs. OmniSharp
+- **Pros of UnityCSharpLSP**:
+  - **Works out of the box right after `git clone`**: OmniSharp breaks unless the Unity Editor has generated `.csproj`/`.sln` files. UnityCSharpLSP directly reconstructs the workspace from `ProjectSettings/`, `Packages/`, and `.asmdef` files.
+  - **Zero file lock conflicts**: When Unity compiles in the background, it frequently locks `Library/ScriptAssemblies/*.dll`, causing OmniSharp read exceptions. UnityCSharpLSP reads assembly bytes in memory to avoid file locking deadlocks.
+  - **No Unity focus switching**: Creating a new `.cs` file is recognized instantly by the internal monitor without having to switch focus back and forth between your code editor and the Unity Editor.
+- **Cons of UnityCSharpLSP**:
+  - OmniSharp supports any standard C# project (ASP.NET Core, WPF, MAUI, etc.), whereas UnityCSharpLSP is exclusively built for Unity projects.
+
+#### 2. UnityCSharpLSP vs. `csharp-ls`
+- **Pros of UnityCSharpLSP**:
+  - `csharp-ls` relies strictly on MSBuild project evaluation. In Unity projects, package dependencies, GUID-based assembly references, and `versionDefines` frequently confuse `csharp-ls`, causing broken type references. UnityCSharpLSP natively parses Unity's package and assembly definition schema.
+  - UnityCSharpLSP provides Unity-tailored semantic enhancements (suppressing `CS0649` on `[SerializeField]`, auto-suggesting `MonoBehaviour` lifecycle methods).
+- **Cons of UnityCSharpLSP**:
+  - `csharp-ls` is a great lightweight general-purpose C# server for standard .NET solutions.
+
+#### 3. UnityCSharpLSP vs. VS Code Built-in Roslyn LSP (C# Dev Kit)
+- **Pros of UnityCSharpLSP**:
+  - **Truly Open & Cross-Platform**: Microsoft's C# Dev Kit is governed by a proprietary license (restricted in commercial/enterprise environments) and tightly coupled to VS Code. UnityCSharpLSP is MIT-licensed and connects to any editor (Neovim, Zed, Helix, VS Code) or AI agent (OpenCode, Claude Code).
+  - **Autonomous & Fast**: No multi-process service hub overhead; operates as a single standalone native executable.
+- **Cons of UnityCSharpLSP**:
+  - Microsoft C# Dev Kit offers full solution explorer UI, complex Roslyn refactoring code actions, and deep integration with the Official Unity Extension when inside VS Code.
+
+---
+
 ## 📥 Installation
 
 ### Method 1: Windows Installer (Recommended)
