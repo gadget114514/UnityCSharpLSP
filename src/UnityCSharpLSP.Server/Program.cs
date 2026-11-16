@@ -13,7 +13,7 @@ LLM / AI AGENT INTEGRATION (OpenCode, Claude Code, Cursor, etc.):
 
     {
       ""lsp"": {
-        ""unity-csharp"": {
+        ""unity-csharp-2nek"": {
           ""command"": [""<path/to/UnityCSharpLSP.Server.exe>"", ""--stdio""],
           ""extensions"": ["".cs""]
         }
@@ -54,7 +54,7 @@ LLM / AI AGENT INTEGRATION (OpenCode, Claude Code, Cursor, etc.):
 $$"""
 {
   "lsp": {
-    "unity-csharp": {
+    "unity-csharp-2nek": {
       "command": ["{{exePath.Replace("\\", "/")}}", "--stdio"],
       "extensions": [".cs"]
     }

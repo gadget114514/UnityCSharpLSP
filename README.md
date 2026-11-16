@@ -151,7 +151,7 @@ Or manually configure your `opencode.json` (or `~/.config/opencode/opencode.json
 ```json
 {
   "lsp": {
-    "unity-csharp": {
+    "unity-csharp-2nek": {
       "command": ["<path/to/UnityCSharpLSP.Server.exe>", "--stdio"],
       "extensions": [".cs"]
     }
