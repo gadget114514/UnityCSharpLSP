@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using UnityCSharpLSP.Protocol.Handlers;
+using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Workspace;
 
 namespace UnityCSharpLSP.Protocol;
@@ -53,6 +54,18 @@ public sealed class LspJsonRpcSession : IDisposable
         var referencesHandler = new ReferencesHandler(() => _workspaceManager);
         _rpc.AddLocalRpcTarget(referencesHandler);
 
+        var documentSymbolHandler = new DocumentSymbolHandler(() => _workspaceManager);
+        _rpc.AddLocalRpcTarget(documentSymbolHandler);
+
+        var workspaceSymbolHandler = new WorkspaceSymbolHandler(() => _workspaceManager);
+        _rpc.AddLocalRpcTarget(workspaceSymbolHandler);
+
+        var implementationHandler = new ImplementationHandler(() => _workspaceManager);
+        _rpc.AddLocalRpcTarget(implementationHandler);
+
+        var callHierarchyHandler = new CallHierarchyHandler(() => _workspaceManager);
+        _rpc.AddLocalRpcTarget(callHierarchyHandler);
+
         var watchedFilesHandler = new WatchedFilesHandler(() => _workspaceManager);
         _rpc.AddLocalRpcTarget(watchedFilesHandler);
     }
@@ -95,7 +108,7 @@ public sealed class LspJsonRpcSession : IDisposable
 
         return new InitializeResult
         {
-            Capabilities = new ServerCapabilities
+            Capabilities = new ExtendedServerCapabilities
             {
                 TextDocumentSync = new TextDocumentSyncOptions
                 {
@@ -106,6 +119,10 @@ public sealed class LspJsonRpcSession : IDisposable
                 HoverProvider = true,
                 DefinitionProvider = true,
                 ReferencesProvider = true,
+                ImplementationProvider = true,
+                DocumentSymbolProvider = true,
+                WorkspaceSymbolProvider = true,
+                CallHierarchyProvider = true,
                 CompletionProvider = new CompletionOptions
                 {
                     TriggerCharacters = new[] { "." },

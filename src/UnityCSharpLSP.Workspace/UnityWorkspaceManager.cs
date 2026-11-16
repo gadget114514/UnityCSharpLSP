@@ -86,7 +86,7 @@ public sealed class UnityWorkspaceManager : IDisposable
 
                 var compilationOptions = new CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
-                    nullableContextOptions: NullableContextOptions.Enable,
+                    nullableContextOptions: NullableContextOptions.Disable,
                     allowUnsafe: node.Asmdef?.AllowUnsafeCode ?? false);
 
                 // Collect document infos

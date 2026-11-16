@@ -23,6 +23,10 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
   - **Hover Tooltips (`textDocument/hover`)**: Rich method and type signatures with XML `<summary>` doc comments.
   - **Code Completion (`textDocument/completion`)**: Dot member access completions, local/type completions, and **MonoBehaviour Magic Methods snippet completions** (`Update`, `Start`, `Awake`, `OnCollisionEnter`, etc.).
   - **Find References (`textDocument/references`)**: Solution-wide symbol search across all assemblies.
+  - **Go to Implementation (`textDocument/implementation`)**: Jump from interfaces and abstract/virtual members to their implementations.
+  - **Document Symbols (`textDocument/documentSymbol`)**: Hierarchical outline of namespaces, types, and members for the current file.
+  - **Workspace Symbols (`workspace/symbol`)**: Project-wide symbol search by name.
+  - **Call Hierarchy (`textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`)**: Explore callers and callees using Roslyn semantic analysis.
 - **👀 Dynamic File Monitoring**:
   - Built-in file watcher and `workspace/didChangeWatchedFiles` handler automatically detect newly created, modified, or deleted `.cs` files and update the Roslyn compilation in real-time.
 - **📦 Single-File Binary**:

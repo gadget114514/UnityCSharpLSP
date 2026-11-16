@@ -67,6 +67,8 @@ The architecture consists of four distinct layers:
 │    - Hover & quick info provider (signatures + XML summaries)   │
 │    - Completion provider (member lookup + MonoBehaviour message)│
 │    - Definition / reference provider (cross-assembly AST walk)  │
+│    - Implementation, document/workspace symbol providers        │
+│    - Call hierarchy provider (incoming/outgoing calls)          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -164,6 +166,12 @@ sequenceDiagram
 | `textDocument/definition` | Go to definition | Resolves declaration AST node, handles cross-asmdef jumps |
 | `textDocument/completion` | Code completion | Member completions, scope lookup, and MonoBehaviour magic methods |
 | `textDocument/references` | Find references | Solution-wide symbol search via `SymbolFinder` |
+| `textDocument/implementation` | Go to implementation | `SymbolFinder.FindImplementationsAsync` for interfaces/overrides |
+| `textDocument/documentSymbol` | Document outline | Hierarchical `DocumentSymbol` tree built from declared semantic symbols |
+| `workspace/symbol` | Workspace symbols | Per-project `Compilation.GetSymbolsWithName` search (capped) |
+| `textDocument/prepareCallHierarchy` | Call hierarchy root | Resolves the callable symbol at the cursor |
+| `callHierarchy/incomingCalls` | Incoming calls | `SymbolFinder.FindCallersAsync` grouped by caller |
+| `callHierarchy/outgoingCalls` | Outgoing calls | Semantic-model walk over invocation/object-creation expressions |
 | `workspace/didChangeWatchedFiles` | File watcher | Adds/removes `.cs` files in compilation automatically |
 
 ---
@@ -183,8 +191,15 @@ UnityCSharpLSP/
 │   │   │   ├── DefinitionHandler.cs
 │   │   │   ├── CompletionHandler.cs
 │   │   │   ├── ReferencesHandler.cs
+│   │   │   ├── ImplementationHandler.cs
+│   │   │   ├── DocumentSymbolHandler.cs
+│   │   │   ├── WorkspaceSymbolHandler.cs
+│   │   │   ├── CallHierarchyHandler.cs
 │   │   │   ├── DiagnosticsHandler.cs
 │   │   │   └── WatchedFilesHandler.cs
+│   │   ├── Models/
+│   │   │   ├── CallHierarchy.cs
+│   │   │   └── ExtendedServerCapabilities.cs
 │   │   └── LspJsonRpcSession.cs
 │   │
 │   ├── UnityCSharpLSP.Workspace/           # Unity workspace engine & Roslyn host
