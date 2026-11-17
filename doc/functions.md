@@ -1,7 +1,7 @@
 # 機能・操作一覧
 
 UnityCSharpLSP が現在サポートしている機能と操作方法の一覧です。
-最終更新: v0.3.0
+最終更新: v0.3.1
 
 ---
 
@@ -133,10 +133,10 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 | `workspace/executeCommand` | request | `unitycsharp.reloadWorkspace`（ワークスペース再構築）、`unitycsharp.showWorkspaceInfo`（概要を返し `window/showMessage` でも通知） |
 | `workspace/didChangeConfiguration` | notification | 設定を typed object に保持。`enableDiagnostics` で push 診断の有効/無効を切り替え、`predefinedSymbols` も保持 |
 | `workspace/didChangeWatchedFiles` | notification | `.cs` ファイルの作成・変更・削除を検出し、Roslyn コンパイルへ反映 |
-| `workspace/willRenameFiles` | request | リネーム前の確認。自動編集なし（`null` を返す） |
+| `workspace/willRenameFiles` | request | 旧ファイル名と同名の型を Roslyn `Renamer` で新ファイル名へリネームし、ソリューション全体の `TextEdit[]` を `WorkspaceEdit.Changes` で返す |
 | `workspace/didRenameFiles` | notification | リネーム後のドキュメント路径を更新（旧パス削除・新パス追加） |
-| `workspace/willCreateFiles` / `workspace/didCreateFiles` | request / notification | 作成前確認（編集なし）／作成後の `.cs` をワークスペースへ追加 |
-| `workspace/willDeleteFiles` / `workspace/didDeleteFiles` | request / notification | 削除前確認（編集なし）／削除後のドキュメントをワークスペースから除去 |
+| `workspace/willCreateFiles` / `workspace/didCreateFiles` | request / notification | 新しい `.cs` に名前空間とクラスのひな形を挿入する編集を返す／作成後の `.cs` をワークスペースへ追加 |
+| `workspace/willDeleteFiles` / `workspace/didDeleteFiles` | request / notification | 削除対象 URI の `DeleteFile` 操作（`ignoreIfNotExists: true`）を `documentChanges` で返す／削除後のドキュメントをワークスペースから除去 |
 
 `initialize` では `executeCommandProvider.commands`、`workspace.fileOperations`、`workspaceSymbolProvider.resolveProvider: true`、`diagnosticProvider.workspaceDiagnostics: true`、`positionEncoding: "utf-16"` を広告します。
 
@@ -176,4 +176,4 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 
 ## 8. 制約・既知の制限
 
-- ファイル操作の `will*` リクエストは自動編集を生成せず常に空の結果を返します。
+- 特になし。

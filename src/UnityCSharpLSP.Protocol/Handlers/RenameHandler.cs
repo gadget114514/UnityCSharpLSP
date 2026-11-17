@@ -106,7 +106,7 @@ public sealed class RenameHandler
         return await CreateWorkspaceEditAsync(solution, renamedSolution, ct).ConfigureAwait(false);
     }
 
-    private static async Task<WorkspaceEdit> CreateWorkspaceEditAsync(
+    internal static async Task<WorkspaceEdit> CreateWorkspaceEditAsync(
         Solution oldSolution,
         Solution newSolution,
         CancellationToken ct)

@@ -292,6 +292,80 @@ public sealed class WorkspaceFeatureTests
     }
 
     [Fact]
+    public async Task WillRenameFiles_ReturnsSymbolRenameEdits()
+    {
+        var (_, client) = await CreateInitializedSessionAsync(new object());
+        try
+        {
+            var root = GetDummyProjectPath();
+            var oldPath = Path.Combine(root, "Assets", "Scripts", "PlayerController.cs");
+            var newPath = Path.Combine(root, "Assets", "Scripts", "PlayerController2.cs");
+
+            var edit = await client.InvokeWithParameterObjectAsync<JObject>(
+                CustomLspMethods.WorkspaceWillRenameFilesName,
+                new { files = new[] { new { oldUri = oldPath, newUri = newPath } } });
+
+            var uri = new Uri(Path.GetFullPath(oldPath)).AbsoluteUri;
+            var textEdits = edit["changes"]?[uri]?.ToObject<JObject[]>() ?? Array.Empty<JObject>();
+            Assert.NotEmpty(textEdits);
+            Assert.Contains("2", string.Concat(textEdits.Select(e => (string?)e["newText"])));
+        }
+        finally
+        {
+            await ShutdownAsync(client);
+        }
+    }
+
+    [Fact]
+    public async Task WillCreateFiles_InsertsClassSkeleton()
+    {
+        var (_, client) = await CreateInitializedSessionAsync(new object());
+        try
+        {
+            var path = Path.Combine(GetDummyProjectPath(), "Assets", "test", "CreatedByWill.cs");
+            var uri = new Uri(Path.GetFullPath(path)).AbsoluteUri;
+
+            var edit = await client.InvokeWithParameterObjectAsync<JObject>(
+                CustomLspMethods.WorkspaceWillCreateFilesName,
+                new { files = new[] { new { uri = uri } } });
+
+            var textEdits = edit["changes"]?[uri]?.ToObject<JObject[]>() ?? Array.Empty<JObject>();
+            var inserted = string.Concat(textEdits.Select(e => (string?)e["newText"]));
+            Assert.Contains("namespace ", inserted);
+            Assert.Contains("public class CreatedByWill", inserted);
+        }
+        finally
+        {
+            await ShutdownAsync(client);
+        }
+    }
+
+    [Fact]
+    public async Task WillDeleteFiles_ReturnsDeleteFileOperation()
+    {
+        var (_, client) = await CreateInitializedSessionAsync(new object());
+        try
+        {
+            var path = Path.Combine(GetDummyProjectPath(), "Assets", "test", "LspTestProgram.cs");
+            var uri = new Uri(Path.GetFullPath(path)).AbsoluteUri;
+
+            var edit = await client.InvokeWithParameterObjectAsync<JObject>(
+                CustomLspMethods.WorkspaceWillDeleteFilesName,
+                new { files = new[] { new { uri = uri } } });
+
+            var changes = edit["documentChanges"]?.ToObject<JObject[]>() ?? Array.Empty<JObject>();
+            var operation = Assert.Single(changes);
+            Assert.Equal("delete", (string?)operation["kind"]);
+            Assert.Equal(uri, (string?)operation["uri"]);
+            Assert.True((bool?)operation["options"]?["ignoreIfNotExists"]);
+        }
+        finally
+        {
+            await ShutdownAsync(client);
+        }
+    }
+
+    [Fact]
     public async Task WillSave_AndWillSaveWaitUntil_AreHandled()
     {
         var (server, client) = await CreateInitializedSessionAsync(new object());
