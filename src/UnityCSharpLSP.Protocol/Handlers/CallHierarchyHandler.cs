@@ -14,9 +14,9 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 /// </summary>
 public sealed class CallHierarchyHandler
 {
-    private readonly Func<UnityWorkspaceManager?> _workspaceManagerProvider;
+    private readonly WorkspaceManagerProvider _workspaceManagerProvider;
 
-    public CallHierarchyHandler(Func<UnityWorkspaceManager?> workspaceManagerProvider)
+    public CallHierarchyHandler(WorkspaceManagerProvider workspaceManagerProvider)
     {
         _workspaceManagerProvider = workspaceManagerProvider;
     }
@@ -26,7 +26,7 @@ public sealed class CallHierarchyHandler
         TextDocumentPositionParams @params,
         CancellationToken ct = default)
     {
-        var ws = _workspaceManagerProvider();
+        var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params.TextDocument?.Uri is null || @params.Position is null)
         {
             return null;
@@ -53,7 +53,7 @@ public sealed class CallHierarchyHandler
         CallHierarchyIncomingCallsParams @params,
         CancellationToken ct = default)
     {
-        var ws = _workspaceManagerProvider();
+        var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params?.Item is null)
         {
             return null;
@@ -119,7 +119,7 @@ public sealed class CallHierarchyHandler
         CallHierarchyOutgoingCallsParams @params,
         CancellationToken ct = default)
     {
-        var ws = _workspaceManagerProvider();
+        var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params?.Item is null)
         {
             return null;

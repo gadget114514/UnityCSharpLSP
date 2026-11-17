@@ -1,7 +1,7 @@
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Semantics.Analyzers;
-using UnityCSharpLSP.Workspace;
 using RoslynDiagnostic = Microsoft.CodeAnalysis.Diagnostic;
 using RoslynSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
 
@@ -9,24 +9,50 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 
 /// <summary>
 /// Converts Roslyn diagnostics to LSP diagnostics, filters suppressed Unity warnings,
-/// and publishes them to the client.
+/// and publishes them to the client for the workspace owning the document.
 /// </summary>
 public sealed class DiagnosticsHandler
 {
     private readonly JsonRpc _rpc;
-    private readonly UnityWorkspaceManager _workspaceManager;
+    private readonly WorkspaceManagerProvider _workspaceManagerProvider;
+    private readonly WorkspaceSettingsStore _settings;
 
-    public DiagnosticsHandler(JsonRpc rpc, UnityWorkspaceManager workspaceManager)
+    public DiagnosticsHandler(
+        JsonRpc rpc,
+        WorkspaceManagerProvider workspaceManagerProvider,
+        WorkspaceSettingsStore settings)
     {
         _rpc = rpc;
-        _workspaceManager = workspaceManager;
+        _workspaceManagerProvider = workspaceManagerProvider;
+        _settings = settings;
     }
 
     public async Task PublishDiagnosticsAsync(Uri uri, string filePath, CancellationToken ct = default)
     {
-        var doc = _workspaceManager.GetDocument(filePath);
+        if (!_settings.Current.EnableDiagnostics)
+        {
+            return;
+        }
+
+        var lspDiagnostics = await GetLspDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
+        var ws = _workspaceManagerProvider(filePath);
+        await PublishAsync(uri, lspDiagnostics, ws?.GetDocumentVersion(filePath)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Returns the filtered LSP diagnostics for a document, applying Unity suppressors.
+    /// </summary>
+    public async Task<Diagnostic[]> GetLspDiagnosticsAsync(string filePath, CancellationToken ct = default)
+    {
+        var ws = _workspaceManagerProvider(filePath);
+        if (ws is null)
+        {
+            return Array.Empty<Diagnostic>();
+        }
+
+        var doc = ws.GetDocument(filePath);
         var semanticModel = doc is not null ? await doc.GetSemanticModelAsync(ct).ConfigureAwait(false) : null;
-        var diagnostics = await _workspaceManager.GetDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
+        var diagnostics = await ws.GetDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
 
         // Apply Unity-specific diagnostic suppressors (e.g. CS0649 for [SerializeField])
         var filteredDiagnostics = diagnostics.Where(d =>
@@ -38,20 +64,29 @@ public sealed class DiagnosticsHandler
             return true;
         });
 
-        var lspDiagnostics = ConvertDiagnostics(filteredDiagnostics);
+        return ConvertDiagnostics(filteredDiagnostics);
+    }
 
+    public async Task ClearDiagnosticsAsync(Uri uri)
+    {
+        await PublishAsync(uri, Array.Empty<Diagnostic>(), version: null).ConfigureAwait(false);
+    }
+
+    private async Task PublishAsync(Uri uri, Diagnostic[] diagnostics, int? version)
+    {
         await _rpc.NotifyWithParameterObjectAsync(
             Methods.TextDocumentPublishDiagnosticsName,
-            new PublishDiagnosticParams
+            new VersionedPublishDiagnosticsParams
             {
                 Uri = uri,
-                Diagnostics = lspDiagnostics,
+                Diagnostics = diagnostics,
+                Version = version,
             }).ConfigureAwait(false);
     }
 
     public static Diagnostic[] ConvertDiagnostics(IEnumerable<RoslynDiagnostic> diagnostics)
     {
-        return diagnostics.Select(d =>
+        return diagnostics.Where(d => d.Location.IsInSource).Select(d =>
         {
             var lineSpan = d.Location.GetLineSpan();
             var start = lineSpan.StartLinePosition;

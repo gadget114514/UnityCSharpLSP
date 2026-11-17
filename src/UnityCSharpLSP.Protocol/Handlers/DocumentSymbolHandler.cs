@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Workspace;
 
 namespace UnityCSharpLSP.Protocol.Handlers;
@@ -11,17 +12,21 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 /// </summary>
 public sealed class DocumentSymbolHandler
 {
-    private readonly Func<UnityWorkspaceManager?> _workspaceManagerProvider;
+    private readonly WorkspaceManagerProvider _workspaceManagerProvider;
+    private readonly ClientCapabilityStore _clientCapabilities;
 
-    public DocumentSymbolHandler(Func<UnityWorkspaceManager?> workspaceManagerProvider)
+    public DocumentSymbolHandler(
+        WorkspaceManagerProvider workspaceManagerProvider,
+        ClientCapabilityStore clientCapabilities)
     {
         _workspaceManagerProvider = workspaceManagerProvider;
+        _clientCapabilities = clientCapabilities;
     }
 
     [JsonRpcMethod(Methods.TextDocumentDocumentSymbolName, UseSingleObjectParameterDeserialization = true)]
-    public async Task<DocumentSymbol[]?> GetDocumentSymbols(DocumentSymbolParams @params, CancellationToken ct = default)
+    public async Task<object?> GetDocumentSymbols(DocumentSymbolParams @params, CancellationToken ct = default)
     {
-        var ws = _workspaceManagerProvider();
+        var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params.TextDocument?.Uri is null)
         {
             return null;
@@ -90,7 +95,52 @@ public sealed class DocumentSymbolHandler
             }
         }
 
-        return topLevel.Count > 0 ? topLevel.ToArray() : null;
+        if (topLevel.Count == 0)
+        {
+            return null;
+        }
+
+        if (_clientCapabilities.SupportsHierarchicalDocumentSymbols)
+        {
+            return topLevel.ToArray();
+        }
+
+        var flatSymbols = new List<SymbolInformation>();
+        foreach (var symbol in topLevel)
+        {
+            Flatten(symbol, @params.TextDocument.Uri, containerName: null, flatSymbols);
+        }
+
+        return flatSymbols.ToArray();
+    }
+
+    private static void Flatten(
+        DocumentSymbol symbol,
+        Uri documentUri,
+        string? containerName,
+        List<SymbolInformation> results)
+    {
+        results.Add(new SymbolInformation
+        {
+            Name = symbol.Name,
+            Kind = symbol.Kind,
+            ContainerName = containerName,
+            Location = new Microsoft.VisualStudio.LanguageServer.Protocol.Location
+            {
+                Uri = documentUri,
+                Range = symbol.Range,
+            },
+        });
+
+        if (symbol.Children is null)
+        {
+            return;
+        }
+
+        foreach (var child in symbol.Children)
+        {
+            Flatten(child, documentUri, symbol.Name, results);
+        }
     }
 
     private static List<DeclarationEntry> CollectDeclarations(

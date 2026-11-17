@@ -57,7 +57,8 @@ public sealed class LspSessionTests
         Assert.NotNull(result);
         Assert.NotNull(result.Capabilities);
         Assert.NotNull(result.Capabilities.TextDocumentSync);
-        Assert.Equal(TextDocumentSyncKind.Full, result.Capabilities.TextDocumentSync?.Change);
+        Assert.Equal(TextDocumentSyncKind.Incremental, result.Capabilities.TextDocumentSync?.Change);
+        Assert.NotNull(result.Capabilities.TextDocumentSync?.Save);
 
         await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
         await client.NotifyAsync(Methods.ExitName);

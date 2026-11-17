@@ -168,11 +168,22 @@ sequenceDiagram
 | `textDocument/references` | Find references | Solution-wide symbol search via `SymbolFinder` |
 | `textDocument/implementation` | Go to implementation | `SymbolFinder.FindImplementationsAsync` for interfaces/overrides |
 | `textDocument/documentSymbol` | Document outline | Hierarchical `DocumentSymbol` tree built from declared semantic symbols |
-| `workspace/symbol` | Workspace symbols | Per-project `Compilation.GetSymbolsWithName` search (capped) |
+| `workspace/symbol` | Workspace symbols | Searches every workspace root/project with `Compilation.GetSymbolsWithName`; emits custom-data `SymbolInformation` and supports partial results |
+| `workspaceSymbol/resolve` | Symbol resolve (custom) | Fills `containerName`, `detail` and `kind` from the `data` payload carried by `workspace/symbol` |
+| `workspace/executeCommand` | Commands | `unitycsharp.reloadWorkspace` rebuilds all roots; `unitycsharp.showWorkspaceInfo` emits `window/showMessage` and returns a summary; optional `$/progress` work-done tokens |
+| `workspace/didChangeConfiguration` | Settings | Stores typed `enableDiagnostics` / `predefinedSymbols`; gates push-diagnostic publication |
+| `workspace/willRenameFiles` / `didRenameFiles` | Rename events | `will` returns no edits; `did` removes the old document and adds the new one in the owning workspace |
+| `workspace/willCreateFiles` / `didCreateFiles` | Create events | `will` returns no edits; `did` adds new `.cs` files from disk |
+| `workspace/willDeleteFiles` / `didDeleteFiles` | Delete events | `will` returns no edits; `did` removes documents |
+| `textDocument/willSave` / `willSaveWaitUntil` | Save hooks | Notifications accepted; wait-until returns an empty `TextEdit[]` |
 | `textDocument/prepareCallHierarchy` | Call hierarchy root | Resolves the callable symbol at the cursor |
 | `callHierarchy/incomingCalls` | Incoming calls | `SymbolFinder.FindCallersAsync` grouped by caller |
 | `callHierarchy/outgoingCalls` | Outgoing calls | Semantic-model walk over invocation/object-creation expressions |
-| `workspace/didChangeWatchedFiles` | File watcher | Adds/removes `.cs` files in compilation automatically |
+| `workspace/didChangeWatchedFiles` | File watcher | Adds/removes `.cs` files in compilation automatically, routed per workspace |
+
+### 4.1 Multi-Root Workspace Routing
+
+`initialize` reads `InitializeParams.WorkspaceFolders` (falling back to `RootUri` / `RootPath`). `WorkspaceRouter` creates one `UnityWorkspaceManager` and `WorkspaceWatcher` per folder, exposes `AllManagers` for workspace-wide requests and resolves each file URI to the manager with the longest matching root prefix. `WorkspaceManagerProvider(path)` is injected into every handler so document-scoped requests are routed automatically; single-root sessions keep identical behaviour.
 
 ---
 

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using Nerdbank.Streams;
 using Newtonsoft.Json.Linq;
@@ -23,9 +25,22 @@ public sealed class SymbolFeatureTests
         var capabilities = result["capabilities"];
         Assert.NotNull(capabilities);
         Assert.True((bool?)capabilities!["documentSymbolProvider"]);
-        Assert.True((bool?)capabilities["workspaceSymbolProvider"]);
+        Assert.True((bool?)capabilities["workspaceSymbolProvider"]?["resolveProvider"]);
         Assert.True((bool?)capabilities["implementationProvider"]);
         Assert.True((bool?)capabilities["callHierarchyProvider"]);
+        Assert.True((bool?)capabilities["typeDefinitionProvider"]);
+        Assert.True((bool?)capabilities["declarationProvider"]);
+        Assert.True((bool?)capabilities["documentHighlightProvider"]);
+        Assert.True((bool?)capabilities["foldingRangeProvider"]);
+        Assert.True((bool?)capabilities["selectionRangeProvider"]);
+        Assert.True((bool?)capabilities["typeHierarchyProvider"]);
+        Assert.True((bool?)capabilities["monikerProvider"]);
+        Assert.True((bool?)capabilities["completionProvider"]?["resolveProvider"]);
+        Assert.True((bool?)capabilities["renameProvider"]?["prepareProvider"]);
+        var signatureTriggers = capabilities["signatureHelpProvider"]?["triggerCharacters"]?.ToObject<string[]>();
+        Assert.NotNull(signatureTriggers);
+        Assert.Contains("(", signatureTriggers!);
+        Assert.Contains(",", signatureTriggers!);
 
         await ShutdownAsync(server, client);
     }
@@ -72,6 +87,74 @@ public sealed class SymbolFeatureTests
             ignoreCase: true);
 
         await ShutdownAsync(server, client);
+    }
+
+    [Fact]
+    public async Task WorkspaceSymbol_ReturnsMoreThan200MatchingSourceSymbols()
+    {
+        var (server, client, dummyPath) = await CreateInitializedSessionAsync();
+        var prefix = "CapRegression" + Guid.NewGuid().ToString("N");
+        var filePath = Path.Combine(dummyPath, "Assets", "Scripts", "Data", prefix + ".cs");
+
+        try
+        {
+            WriteSymbolFile(filePath, prefix, symbolCount: 220);
+            Assert.NotNull(server.WorkspaceManager?.AddOrRefreshDiskFile(filePath));
+
+            var symbols = await client.InvokeWithParameterObjectAsync<SymbolInformation[]?>(
+                Methods.WorkspaceSymbolName,
+                new WorkspaceSymbolParams { Query = prefix });
+
+            Assert.NotNull(symbols);
+            var generated = symbols.Where(s =>
+                string.Equals(s.Location.Uri.LocalPath, filePath, StringComparison.OrdinalIgnoreCase)).ToArray();
+            Assert.Equal(220, generated.Length);
+            Assert.Equal(220, generated.Select(s => s.Name).Distinct(StringComparer.Ordinal).Count());
+        }
+        finally
+        {
+            server.WorkspaceManager?.RemoveDocument(filePath);
+            File.Delete(filePath);
+            await ShutdownAsync(server, client);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceSymbol_WithPartialResultToken_StreamsBatchesAndReturnsNull()
+    {
+        var progress = new ProgressCollector();
+        var (server, client, dummyPath) = await CreateInitializedSessionAsync(progress);
+        var prefix = "PartialRegression" + Guid.NewGuid().ToString("N");
+        var filePath = Path.Combine(dummyPath, "Assets", "Scripts", "Data", prefix + ".cs");
+        const string token = "workspace-symbol-progress";
+
+        try
+        {
+            WriteSymbolFile(filePath, prefix, symbolCount: 125);
+            Assert.NotNull(server.WorkspaceManager?.AddOrRefreshDiskFile(filePath));
+
+            var result = await client.InvokeWithParameterObjectAsync<SymbolInformation[]?>(
+                Methods.WorkspaceSymbolName,
+                new { query = prefix, partialResultToken = token });
+
+            Assert.Null(result);
+            var notifications = progress.Notifications.ToArray();
+            Assert.True(notifications.Length > 1, $"Expected multiple progress notifications, got {notifications.Length}.");
+            Assert.All(notifications, notification => Assert.Equal(token, notification["token"]?.Value<string>()));
+
+            var generated = notifications
+                .SelectMany(n => n["value"]!.ToObject<SymbolInformation[]>()!)
+                .Where(s => string.Equals(s.Location.Uri.LocalPath, filePath, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            Assert.Equal(125, generated.Length);
+            Assert.Equal(125, generated.Select(s => s.Name).Distinct(StringComparer.Ordinal).Count());
+        }
+        finally
+        {
+            server.WorkspaceManager?.RemoveDocument(filePath);
+            File.Delete(filePath);
+            await ShutdownAsync(server, client);
+        }
     }
 
     [Fact]
@@ -140,6 +223,29 @@ public sealed class SymbolFeatureTests
         await ShutdownAsync(server, client);
     }
 
+    private static void WriteSymbolFile(string filePath, string prefix, int symbolCount)
+    {
+        var text = new StringBuilder("namespace Game.Data\n{\n");
+        for (var i = 0; i < symbolCount; i++)
+        {
+            text.Append("    public class ").Append(prefix).Append(i.ToString("D3")).AppendLine(" { }");
+        }
+
+        text.AppendLine("}");
+        File.WriteAllText(filePath, text.ToString());
+    }
+
+    private sealed class ProgressCollector
+    {
+        public ConcurrentQueue<JObject> Notifications { get; } = new();
+
+        [JsonRpcMethod(Methods.ProgressNotificationName, UseSingleObjectParameterDeserialization = true)]
+        public void OnProgress(JObject notification)
+        {
+            Notifications.Enqueue(notification);
+        }
+    }
+
     private static async Task<CallHierarchyItem> PrepareAsync(
         JsonRpc client,
         Uri uri,
@@ -159,9 +265,21 @@ public sealed class SymbolFeatureTests
         return Assert.Single(items);
     }
 
-    private static async Task<(LspJsonRpcSession Server, JsonRpc Client, string DummyPath)> CreateInitializedSessionAsync()
+    private static async Task<(LspJsonRpcSession Server, JsonRpc Client, string DummyPath)> CreateInitializedSessionAsync(
+        object? clientCallbackTarget = null,
+        JObject? clientCapabilities = null)
     {
         var dummyPath = GetDummyProjectPath();
+        clientCapabilities ??= new JObject
+        {
+            ["textDocument"] = new JObject
+            {
+                ["documentSymbol"] = new JObject
+                {
+                    ["hierarchicalDocumentSymbolSupport"] = true,
+                },
+            },
+        };
         var (clientStream, serverStream) = FullDuplexStream.CreatePair();
 
         var server = new LspJsonRpcSession(serverStream, serverStream);
@@ -169,14 +287,19 @@ public sealed class SymbolFeatureTests
 
         var clientHandler = new HeaderDelimitedMessageHandler(clientStream, clientStream, new JsonMessageFormatter());
         var client = new JsonRpc(clientHandler);
+        if (clientCallbackTarget is not null)
+        {
+            client.AddLocalRpcTarget(clientCallbackTarget);
+        }
+
         client.StartListening();
 
         await client.InvokeWithParameterObjectAsync<InitializeResult>(
             Methods.InitializeName,
-            new InitializeParams
+            new
             {
-                RootUri = new Uri(dummyPath),
-                Capabilities = new ClientCapabilities(),
+                rootUri = new Uri(dummyPath),
+                capabilities = clientCapabilities,
             });
 
         return (server, client, dummyPath);

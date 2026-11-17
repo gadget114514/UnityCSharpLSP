@@ -18,6 +18,7 @@ internal static class LspSymbolMapper
         typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
         genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
         memberOptions: SymbolDisplayMemberOptions.IncludeType |
+                       SymbolDisplayMemberOptions.IncludeContainingType |
                        SymbolDisplayMemberOptions.IncludeParameters,
         parameterOptions: SymbolDisplayParameterOptions.IncludeType |
                           SymbolDisplayParameterOptions.IncludeName,

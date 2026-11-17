@@ -11,7 +11,7 @@ public class DummyProjectTests
         var found = UnityInstallationLocator.TryGetProjectVersion(TestSupport.DummyProjectRoot, out var version);
 
         Assert.True(found);
-        Assert.Equal("2022.3.20f1", version);
+        Assert.Equal("6000.3.16f1", version);
     }
 
     [Fact]
@@ -19,10 +19,9 @@ public class DummyProjectTests
     {
         var deps = UnityPackageResolver.ReadManifestDependencies(TestSupport.DummyProjectRoot);
 
-        Assert.Equal("3.0.6", deps["com.unity.textmeshpro"]);
-        Assert.Equal("14.0.9", deps["com.unity.render-pipelines.universal"]);
+        Assert.Equal("17.3.0", deps["com.unity.render-pipelines.universal"]);
         Assert.Equal("1.0.0", deps["com.unity.modules.physics"]);
-        Assert.Equal(39, deps.Count);
+        Assert.Equal(42, deps.Count);
     }
 
     [Fact]
@@ -72,7 +71,9 @@ public class DummyProjectTests
         var graph = AsmdefGraphBuilder.Build(Path.Combine(TestSupport.DummyProjectRoot, "Assets"));
 
         Assert.Empty(graph.Warnings);
-        Assert.Equal(new[] { "Game.Data", "Game.Editor", "Game.Runtime" }, graph.Assemblies.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Equal(
+            new[] { "Assembly-CSharp", "Game.Data", "Game.Editor", "Game.Runtime" },
+            graph.Assemblies.Keys.OrderBy(k => k, StringComparer.Ordinal));
 
         var data = graph.TryGetAssembly("Game.Data")!;
         Assert.Single(data.SourceFiles);
@@ -84,5 +85,8 @@ public class DummyProjectTests
         Assert.Empty(editor.SourceFiles);
 
         Assert.Equal("Game.Data", graph.TryGetOwningAssembly(data.SourceFiles[0])!.Name);
+
+        var defaultAssembly = graph.TryGetAssembly("Assembly-CSharp")!;
+        Assert.Contains(defaultAssembly.SourceFiles, path => path.EndsWith("LspTestProgram.cs", StringComparison.Ordinal));
     }
 }

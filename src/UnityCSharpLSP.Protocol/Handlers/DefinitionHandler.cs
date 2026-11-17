@@ -12,9 +12,9 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 /// </summary>
 public sealed class DefinitionHandler
 {
-    private readonly Func<UnityWorkspaceManager?> _workspaceManagerProvider;
+    private readonly WorkspaceManagerProvider _workspaceManagerProvider;
 
-    public DefinitionHandler(Func<UnityWorkspaceManager?> workspaceManagerProvider)
+    public DefinitionHandler(WorkspaceManagerProvider workspaceManagerProvider)
     {
         _workspaceManagerProvider = workspaceManagerProvider;
     }
@@ -22,7 +22,7 @@ public sealed class DefinitionHandler
     [JsonRpcMethod(Methods.TextDocumentDefinitionName, UseSingleObjectParameterDeserialization = true)]
     public async Task<LspLocation[]?> GotoDefinition(TextDocumentPositionParams @params, CancellationToken ct = default)
     {
-        var ws = _workspaceManagerProvider();
+        var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params.TextDocument?.Uri is null || @params.Position is null)
         {
             return null;

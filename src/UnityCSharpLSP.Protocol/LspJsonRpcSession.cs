@@ -1,4 +1,5 @@
 using Microsoft.VisualStudio.LanguageServer.Protocol;
+using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
 using UnityCSharpLSP.Protocol.Handlers;
 using UnityCSharpLSP.Protocol.Models;
@@ -15,13 +16,15 @@ public sealed class LspJsonRpcSession : IDisposable
     private readonly Stream _output;
     private readonly JsonRpc _rpc;
     private readonly TaskCompletionSource<int> _exitTcs = new();
+    private readonly ClientCapabilityStore _clientCapabilities = new();
+    private readonly WorkspaceSettingsStore _settings = new();
 
-    private UnityWorkspaceManager? _workspaceManager;
-    private WorkspaceWatcher? _workspaceWatcher;
-    private DiagnosticsHandler? _diagnosticsHandler;
+    private WorkspaceRouter? _router;
     private bool _isShutdown;
 
-    public UnityWorkspaceManager? WorkspaceManager => _workspaceManager;
+    public UnityWorkspaceManager? WorkspaceManager => _router?.DefaultManager;
+    public WorkspaceRouter? Router => _router;
+    public WorkspaceSettingsStore Settings => _settings;
     public JsonRpc JsonRpc => _rpc;
 
     public LspJsonRpcSession(Stream input, Stream output)
@@ -35,40 +38,53 @@ public sealed class LspJsonRpcSession : IDisposable
         // Register lifecycle methods on this session
         _rpc.AddLocalRpcTarget(this);
 
+        var manager = (WorkspaceManagerProvider)(path => _router?.GetManagerForFile(path));
+        var allManagers = (Func<IReadOnlyList<UnityWorkspaceManager>>)(() =>
+            _router?.AllManagers ?? Array.Empty<UnityWorkspaceManager>());
+
         // Register text document sync handler
-        var syncHandler = new TextDocumentSyncHandler(
-            () => _workspaceManager,
-            () => _diagnosticsHandler);
+        var syncHandler = new TextDocumentSyncHandler(manager, () => _diagnosticsHandler);
         _rpc.AddLocalRpcTarget(syncHandler);
 
         // Register language feature handlers
-        var hoverHandler = new HoverHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(hoverHandler);
+        _rpc.AddLocalRpcTarget(new HoverHandler(manager, _clientCapabilities));
+        _rpc.AddLocalRpcTarget(new DefinitionHandler(manager));
+        _rpc.AddLocalRpcTarget(new TypeDefinitionHandler(manager));
+        _rpc.AddLocalRpcTarget(new DeclarationHandler(manager));
+        _rpc.AddLocalRpcTarget(new CompletionHandler(manager, _clientCapabilities));
+        _rpc.AddLocalRpcTarget(new ReferencesHandler(manager));
+        _rpc.AddLocalRpcTarget(new DocumentSymbolHandler(manager, _clientCapabilities));
+        _rpc.AddLocalRpcTarget(new DocumentHighlightHandler(manager));
+        _rpc.AddLocalRpcTarget(new FoldingRangeHandler(manager));
+        _rpc.AddLocalRpcTarget(new SelectionRangeHandler(manager));
+        _rpc.AddLocalRpcTarget(new SignatureHelpHandler(manager));
+        _rpc.AddLocalRpcTarget(new RenameHandler(manager));
+        _rpc.AddLocalRpcTarget(new WorkspaceSymbolHandler(allManagers, _rpc));
+        _rpc.AddLocalRpcTarget(new ImplementationHandler(manager));
+        _rpc.AddLocalRpcTarget(new CallHierarchyHandler(manager));
+        _rpc.AddLocalRpcTarget(new TypeHierarchyHandler(manager));
+        _rpc.AddLocalRpcTarget(new MonikerHandler(manager));
+        _rpc.AddLocalRpcTarget(new WatchedFilesHandler(manager));
+        _rpc.AddLocalRpcTarget(new FormattingHandler(manager));
+        _rpc.AddLocalRpcTarget(new CodeActionHandler(manager));
+        _rpc.AddLocalRpcTarget(new SemanticTokensHandler(manager));
+        _rpc.AddLocalRpcTarget(new InlayHintHandler(manager));
+        _rpc.AddLocalRpcTarget(new CodeLensHandler(manager));
+        _rpc.AddLocalRpcTarget(new DocumentLinkHandler(manager));
+        _rpc.AddLocalRpcTarget(new LinkedEditingRangeHandler(manager));
+        _rpc.AddLocalRpcTarget(new InlineValueHandler(manager));
+        _rpc.AddLocalRpcTarget(new PullDiagnosticsHandler(manager, () => _diagnosticsHandler));
+        _rpc.AddLocalRpcTarget(new WorkspaceDiagnosticsHandler(allManagers, () => _diagnosticsHandler));
 
-        var definitionHandler = new DefinitionHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(definitionHandler);
+        // Workspace-level handlers
+        _rpc.AddLocalRpcTarget(new ExecuteCommandHandler(() => _router, _rpc));
+        _rpc.AddLocalRpcTarget(new ConfigurationHandler(_settings));
+        _rpc.AddLocalRpcTarget(new FileOperationsHandler(manager));
 
-        var completionHandler = new CompletionHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(completionHandler);
-
-        var referencesHandler = new ReferencesHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(referencesHandler);
-
-        var documentSymbolHandler = new DocumentSymbolHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(documentSymbolHandler);
-
-        var workspaceSymbolHandler = new WorkspaceSymbolHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(workspaceSymbolHandler);
-
-        var implementationHandler = new ImplementationHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(implementationHandler);
-
-        var callHierarchyHandler = new CallHierarchyHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(callHierarchyHandler);
-
-        var watchedFilesHandler = new WatchedFilesHandler(() => _workspaceManager);
-        _rpc.AddLocalRpcTarget(watchedFilesHandler);
+        _diagnosticsHandler = new DiagnosticsHandler(_rpc, manager, _settings);
     }
+
+    private DiagnosticsHandler? _diagnosticsHandler;
 
     public void Start()
     {
@@ -78,32 +94,20 @@ public sealed class LspJsonRpcSession : IDisposable
     public Task<int> WaitForExitAsync() => _exitTcs.Task;
 
     [JsonRpcMethod(Methods.InitializeName, UseSingleObjectParameterDeserialization = true)]
-    public InitializeResult Initialize(InitializeParams @params)
+    public InitializeResult Initialize(JObject @params)
     {
-        string? rootPath = null;
-#pragma warning disable CS0618
-        if (@params.RootUri is not null)
-        {
-            rootPath = @params.RootUri.LocalPath;
-        }
-        else if (!string.IsNullOrEmpty(@params.RootPath))
-        {
-            rootPath = @params.RootPath;
-        }
-#pragma warning restore CS0618
+        var initializeParams = @params.ToObject<InitializeParams>() ?? new InitializeParams();
+        _clientCapabilities.Update(
+            initializeParams.Capabilities,
+            @params["capabilities"] as JObject);
 
-        if (!string.IsNullOrEmpty(rootPath) && Directory.Exists(rootPath))
+        var roots = CollectWorkspaceRoots(@params, initializeParams);
+        if (_router is null || roots.Count > 0)
         {
-            try
-            {
-                _workspaceManager = UnityWorkspaceManager.Create(rootPath);
-                _workspaceWatcher = new WorkspaceWatcher(_workspaceManager, rootPath);
-                _diagnosticsHandler = new DiagnosticsHandler(_rpc, _workspaceManager);
-            }
-            catch
-            {
-                // If loading fails, keep running with empty workspace
-            }
+            var newRouter = new WorkspaceRouter();
+            newRouter.Initialize(roots);
+            _router?.Dispose();
+            _router = newRouter;
         }
 
         return new InitializeResult
@@ -113,23 +117,119 @@ public sealed class LspJsonRpcSession : IDisposable
                 TextDocumentSync = new TextDocumentSyncOptions
                 {
                     OpenClose = true,
-                    Change = TextDocumentSyncKind.Full,
+                    Change = TextDocumentSyncKind.Incremental,
                     Save = new SaveOptions { IncludeText = false },
+                    WillSave = true,
+                    WillSaveWaitUntil = true,
                 },
                 HoverProvider = true,
                 DefinitionProvider = true,
+                TypeDefinitionProvider = true,
+                DeclarationProvider = true,
                 ReferencesProvider = true,
                 ImplementationProvider = true,
                 DocumentSymbolProvider = true,
-                WorkspaceSymbolProvider = true,
+                DocumentHighlightProvider = true,
+                WorkspaceSymbolProvider = new WorkspaceSymbolResolveOptions
+                {
+                    ResolveProvider = true,
+                    WorkDoneProgress = true,
+                },
                 CallHierarchyProvider = true,
+                FoldingRangeProvider = true,
+                SelectionRangeProvider = true,
+                TypeHierarchyProvider = true,
+                MonikerProvider = true,
+                RenameProvider = new RenameOptions { PrepareProvider = true },
+                SignatureHelpProvider = new SignatureHelpOptions
+                {
+                    TriggerCharacters = new[] { "(", "," },
+                    RetriggerCharacters = new[] { "," },
+                },
                 CompletionProvider = new CompletionOptions
                 {
                     TriggerCharacters = new[] { "." },
-                    ResolveProvider = false,
+                    ResolveProvider = true,
+                },
+                DocumentFormattingProvider = true,
+                DocumentRangeFormattingProvider = true,
+                DocumentOnTypeFormattingProvider = new DocumentOnTypeFormattingOptions
+                {
+                    FirstTriggerCharacter = "}",
+                    MoreTriggerCharacter = new[] { ";", "\n" },
+                },
+                CodeActionProvider = new CodeActionOptions
+                {
+                    CodeActionKinds = new[] { CodeActionKind.QuickFix, CodeActionKind.Source },
+                    ResolveProvider = true,
+                },
+                SemanticTokensOptions = SemanticTokensHandler.CreateOptions(),
+                CodeLensProvider = new CodeLensOptions { ResolveProvider = true },
+                DocumentLinkProvider = new DocumentLinkOptions { ResolveProvider = false },
+                LinkedEditingRangeProvider = true,
+                InlayHintProvider = new InlayHintOptions { ResolveProvider = false },
+                InlineValueProvider = true,
+                DiagnosticProvider = new DiagnosticOptions
+                {
+                    Identifier = "unitycsharp",
+                    InterFileDependencies = false,
+                    WorkspaceDiagnostics = true,
+                },
+                ExecuteCommandProvider = new ExecuteCommandOptions
+                {
+                    Commands = ExecuteCommandHandler.Commands,
+                    WorkDoneProgress = true,
+                },
+                PositionEncoding = "utf-16",
+                Workspace = new WorkspaceServerCapabilities
+                {
+                    FileOperations = new FileOperationOptions
+                    {
+                        DidCreate = new FileOperationRegistrationOptions(),
+                        WillCreate = new FileOperationRegistrationOptions(),
+                        DidRename = new FileOperationRegistrationOptions(),
+                        WillRename = new FileOperationRegistrationOptions(),
+                        DidDelete = new FileOperationRegistrationOptions(),
+                        WillDelete = new FileOperationRegistrationOptions(),
+                    },
                 },
             },
         };
+    }
+
+    private static IReadOnlyList<string> CollectWorkspaceRoots(JObject @params, InitializeParams initializeParams)
+    {
+        var roots = new List<string>();
+        if (@params["workspaceFolders"] is JArray folders)
+        {
+            foreach (var folder in folders)
+            {
+                var path = ToLocalPath(folder?["uri"]?.Value<string>());
+                if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+                {
+                    roots.Add(path);
+                }
+            }
+        }
+
+        if (roots.Count > 0)
+        {
+            return roots;
+        }
+
+#pragma warning disable CS0618
+        var fallback = ToLocalPath(initializeParams.RootUri?.OriginalString)
+                       ?? initializeParams.RootPath;
+#pragma warning restore CS0618
+        return string.IsNullOrEmpty(fallback) || !Directory.Exists(fallback)
+            ? Array.Empty<string>()
+            : new[] { fallback };
+    }
+
+    private static string? ToLocalPath(string? uri)
+    {
+        if (string.IsNullOrEmpty(uri)) return null;
+        return Uri.TryCreate(uri, UriKind.Absolute, out var parsed) ? parsed.LocalPath : uri;
     }
 
     [JsonRpcMethod(Methods.InitializedName)]
@@ -142,11 +242,9 @@ public sealed class LspJsonRpcSession : IDisposable
     public object? Shutdown()
     {
         _isShutdown = true;
-        _workspaceWatcher?.Dispose();
-        _workspaceWatcher = null;
-        _workspaceManager?.Dispose();
-        _workspaceManager = null;
         _diagnosticsHandler = null;
+        _router?.Dispose();
+        _router = null;
         return null;
     }
 
@@ -159,8 +257,8 @@ public sealed class LspJsonRpcSession : IDisposable
 
     public void Dispose()
     {
-        _workspaceWatcher?.Dispose();
-        _workspaceManager?.Dispose();
+        _diagnosticsHandler = null;
+        _router?.Dispose();
         _rpc.Dispose();
         _input.Dispose();
         _output.Dispose();

@@ -19,6 +19,7 @@ public sealed class UnityWorkspaceManager : IDisposable
 
     private readonly ConcurrentDictionary<string, ProjectId> _projectIdsByName = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DocumentId> _documentIdsByPath = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, int> _documentVersionsByPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, MetadataReference> _metadataReferenceCache = new(StringComparer.OrdinalIgnoreCase);
 
     public UnityProjectInfo ProjectInfo { get; }
@@ -471,12 +472,26 @@ public sealed class UnityWorkspaceManager : IDisposable
     }
 
     /// <summary>
+    /// Gets the latest LSP version for an open document, if one has been supplied.
+    /// </summary>
+    public int? GetDocumentVersion(string filePath)
+    {
+        var full = Path.GetFullPath(filePath);
+        return _documentVersionsByPath.TryGetValue(full, out var version) ? version : null;
+    }
+
+    /// <summary>
     /// Opens or tracks an in-memory document with specified content.
     /// </summary>
-    public DocumentId OpenOrUpdateDocument(string filePath, string text)
+    public DocumentId OpenOrUpdateDocument(string filePath, string text, int? version = null)
     {
         var full = Path.GetFullPath(filePath);
         var sourceText = SourceText.From(text);
+
+        if (version.HasValue)
+        {
+            _documentVersionsByPath[full] = version.Value;
+        }
 
         lock (_solutionLock)
         {
@@ -514,19 +529,33 @@ public sealed class UnityWorkspaceManager : IDisposable
     /// <summary>
     /// Updates the text of an open document using full replacement.
     /// </summary>
-    public bool UpdateDocumentText(string filePath, string newText)
+    public bool UpdateDocumentText(string filePath, string newText, int? version = null)
     {
-        var docId = GetDocumentId(filePath);
+        return UpdateDocumentText(filePath, SourceText.From(newText), version);
+    }
+
+    /// <summary>
+    /// Updates the text of an open document and optionally tracks its LSP version.
+    /// </summary>
+    public bool UpdateDocumentText(string filePath, SourceText newText, int? version = null)
+    {
+        var full = Path.GetFullPath(filePath);
+        var docId = GetDocumentId(full);
         if (docId is null)
         {
             return false;
         }
 
-        var sourceText = SourceText.From(newText);
         lock (_solutionLock)
         {
-            var newSol = CurrentSolution.WithDocumentText(docId, sourceText);
-            return _workspace.TryApplyChanges(newSol);
+            var newSol = CurrentSolution.WithDocumentText(docId, newText);
+            var applied = _workspace.TryApplyChanges(newSol);
+            if (applied && version.HasValue)
+            {
+                _documentVersionsByPath[full] = version.Value;
+            }
+
+            return applied;
         }
     }
 
@@ -536,25 +565,32 @@ public sealed class UnityWorkspaceManager : IDisposable
     public bool CloseDocument(string filePath)
     {
         var full = Path.GetFullPath(filePath);
-        if (!_documentIdsByPath.TryGetValue(full, out var docId))
+        try
         {
-            return false;
-        }
+            if (!_documentIdsByPath.TryGetValue(full, out _))
+            {
+                return false;
+            }
 
-        if (File.Exists(full))
+            if (File.Exists(full))
+            {
+                try
+                {
+                    var diskText = File.ReadAllText(full);
+                    return UpdateDocumentText(full, diskText);
+                }
+                catch
+                {
+                    // Ignore disk read errors on close
+                }
+            }
+
+            return true;
+        }
+        finally
         {
-            try
-            {
-                var diskText = File.ReadAllText(full);
-                return UpdateDocumentText(full, diskText);
-            }
-            catch
-            {
-                // Ignore disk read errors on close
-            }
+            _documentVersionsByPath.TryRemove(full, out _);
         }
-
-        return true;
     }
 
     /// <summary>

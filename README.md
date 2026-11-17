@@ -25,10 +25,18 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
   - **Find References (`textDocument/references`)**: Solution-wide symbol search across all assemblies.
   - **Go to Implementation (`textDocument/implementation`)**: Jump from interfaces and abstract/virtual members to their implementations.
   - **Document Symbols (`textDocument/documentSymbol`)**: Hierarchical outline of namespaces, types, and members for the current file.
-  - **Workspace Symbols (`workspace/symbol`)**: Project-wide symbol search by name.
-  - **Call Hierarchy (`textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`)**: Explore callers and callees using Roslyn semantic analysis.
-- **👀 Dynamic File Monitoring**:
-  - Built-in file watcher and `workspace/didChangeWatchedFiles` handler automatically detect newly created, modified, or deleted `.cs` files and update the Roslyn compilation in real-time.
+   - **Workspace Symbols (`workspace/symbol`, `workspaceSymbol/resolve`)**: Project-wide symbol search by name with lazily resolved symbol details.
+   - **Call Hierarchy (`textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`)**: Explore callers and callees using Roslyn semantic analysis.
+   - **Will-Save Hooks (`textDocument/willSave`, `textDocument/willSaveWaitUntil`)**: Standard save lifecycle support.
+ - **🗂 Multi-Root Workspaces**:
+   - Accepts multiple `workspaceFolders`; a `WorkspaceRouter` builds one Roslyn workspace per root and routes each document to the longest matching root prefix. Single-root (`rootUri` / `rootPath`) behaviour is unchanged.
+ - **🧩 Workspace Commands & Configuration**:
+   - `workspace/executeCommand` supports `unitycsharp.reloadWorkspace` (rebuild from project roots) and `unitycsharp.showWorkspaceInfo` (projects/assemblies/documents summary).
+   - `workspace/didChangeConfiguration` stores typed settings (`enableDiagnostics`, `predefinedSymbols`) and can disable diagnostic publication.
+   - Full file-operation events (`workspace/willCreateFiles` / `didCreateFiles`, `willRenameFiles` / `didRenameFiles`, `willDeleteFiles` / `didDeleteFiles`) keep the workspace in sync with editor file changes.
+   - Advertises `positionEncoding: utf-16` and work-done progress for long-running commands.
+ - **👀 Dynamic File Monitoring**:
+   - Built-in file watcher and `workspace/didChangeWatchedFiles` handler automatically detect newly created, modified, or deleted `.cs` files and update the Roslyn compilation in real-time.
 - **📦 Single-File Binary**:
   - Bundled with all Roslyn and JSON-RPC dependencies into a single, standalone executable.
 

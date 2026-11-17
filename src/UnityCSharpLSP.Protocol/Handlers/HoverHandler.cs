@@ -2,6 +2,7 @@ using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Workspace;
 
 namespace UnityCSharpLSP.Protocol.Handlers;
@@ -11,7 +12,8 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 /// </summary>
 public sealed class HoverHandler
 {
-    private readonly Func<UnityWorkspaceManager?> _workspaceManagerProvider;
+    private readonly WorkspaceManagerProvider _workspaceManagerProvider;
+    private readonly ClientCapabilityStore _clientCapabilities;
 
     private static readonly SymbolDisplayFormat HoverDisplayFormat = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
@@ -27,15 +29,18 @@ public sealed class HoverHandler
         miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes |
                               SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers);
 
-    public HoverHandler(Func<UnityWorkspaceManager?> workspaceManagerProvider)
+    public HoverHandler(
+        WorkspaceManagerProvider workspaceManagerProvider,
+        ClientCapabilityStore clientCapabilities)
     {
         _workspaceManagerProvider = workspaceManagerProvider;
+        _clientCapabilities = clientCapabilities;
     }
 
     [JsonRpcMethod(Methods.TextDocumentHoverName, UseSingleObjectParameterDeserialization = true)]
     public async Task<Hover?> Hover(TextDocumentPositionParams @params, CancellationToken ct = default)
     {
-        var ws = _workspaceManagerProvider();
+        var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params.TextDocument?.Uri is null || @params.Position is null)
         {
             return null;
@@ -54,24 +59,32 @@ public sealed class HoverHandler
         }
 
         var signature = symbol.ToDisplayString(HoverDisplayFormat);
-        var markdown = FormatHoverMarkdown(signature, symbol);
+        var documentationKind = _clientCapabilities.HoverDocumentationKind;
+        var contents = FormatHover(signature, symbol, documentationKind);
 
         return new Hover
         {
             Contents = new MarkupContent
             {
-                Kind = MarkupKind.Markdown,
-                Value = markdown,
+                Kind = documentationKind,
+                Value = contents,
             },
         };
     }
 
-    private static string FormatHoverMarkdown(string signature, ISymbol symbol)
+    private static string FormatHover(string signature, ISymbol symbol, MarkupKind documentationKind)
     {
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("```csharp");
-        sb.AppendLine(signature);
-        sb.AppendLine("```");
+        if (documentationKind == MarkupKind.Markdown)
+        {
+            sb.AppendLine("```csharp");
+            sb.AppendLine(signature);
+            sb.AppendLine("```");
+        }
+        else
+        {
+            sb.AppendLine(signature);
+        }
 
         var docXml = symbol.GetDocumentationCommentXml();
         if (!string.IsNullOrWhiteSpace(docXml))

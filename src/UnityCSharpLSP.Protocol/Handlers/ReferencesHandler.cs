@@ -12,9 +12,9 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 /// </summary>
 public sealed class ReferencesHandler
 {
-    private readonly Func<UnityWorkspaceManager?> _workspaceManagerProvider;
+    private readonly WorkspaceManagerProvider _workspaceManagerProvider;
 
-    public ReferencesHandler(Func<UnityWorkspaceManager?> workspaceManagerProvider)
+    public ReferencesHandler(WorkspaceManagerProvider workspaceManagerProvider)
     {
         _workspaceManagerProvider = workspaceManagerProvider;
     }
@@ -22,7 +22,7 @@ public sealed class ReferencesHandler
     [JsonRpcMethod(Methods.TextDocumentReferencesName, UseSingleObjectParameterDeserialization = true)]
     public async Task<LspLocation[]?> FindReferences(ReferenceParams @params, CancellationToken ct = default)
     {
-        var ws = _workspaceManagerProvider();
+        var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params.TextDocument?.Uri is null || @params.Position is null)
         {
             return null;

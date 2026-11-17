@@ -1,8 +1,11 @@
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
+using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
+using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Semantics.Features;
 using UnityCSharpLSP.Workspace;
 
@@ -13,17 +16,21 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 /// </summary>
 public sealed class CompletionHandler
 {
-    private readonly Func<UnityWorkspaceManager?> _workspaceManagerProvider;
+    private readonly WorkspaceManagerProvider _workspaceManagerProvider;
+    private readonly ClientCapabilityStore _clientCapabilities;
 
-    public CompletionHandler(Func<UnityWorkspaceManager?> workspaceManagerProvider)
+    public CompletionHandler(
+        WorkspaceManagerProvider workspaceManagerProvider,
+        ClientCapabilityStore clientCapabilities)
     {
         _workspaceManagerProvider = workspaceManagerProvider;
+        _clientCapabilities = clientCapabilities;
     }
 
     [JsonRpcMethod(Methods.TextDocumentCompletionName, UseSingleObjectParameterDeserialization = true)]
     public async Task<CompletionItem[]?> Completion(CompletionParams @params, CancellationToken ct = default)
     {
-        var ws = _workspaceManagerProvider();
+        var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params.TextDocument?.Uri is null || @params.Position is null)
         {
             return null;
@@ -101,6 +108,7 @@ public sealed class CompletionHandler
                     Label = sym.Name,
                     Kind = MapSymbolKind(sym),
                     Detail = sym.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                    Data = sym.GetDocumentationCommentId(),
                 });
             }
 
@@ -117,6 +125,93 @@ public sealed class CompletionHandler
         }
 
         return items.Count > 0 ? items.ToArray() : null;
+    }
+
+    [JsonRpcMethod(Methods.TextDocumentCompletionResolveName, UseSingleObjectParameterDeserialization = true)]
+    public async Task<CompletionItem?> Resolve(CompletionItem item, CancellationToken ct = default)
+    {
+        var ws = _workspaceManagerProvider();
+        var documentationCommentId = GetDocumentationCommentId(item.Data);
+        if (ws is null || string.IsNullOrWhiteSpace(documentationCommentId))
+        {
+            return item;
+        }
+
+        foreach (var project in ws.CurrentSolution.Projects)
+        {
+            var compilation = await project.GetCompilationAsync(ct).ConfigureAwait(false);
+            if (compilation is null)
+            {
+                continue;
+            }
+
+            var symbol = DocumentationCommentId.GetFirstSymbolForDeclarationId(
+                documentationCommentId,
+                compilation);
+            if (symbol is null)
+            {
+                continue;
+            }
+
+            item.Detail = symbol.ToDisplayString(LspSymbolMapper.DetailFormat);
+            var documentation = GetDocumentation(symbol);
+            if (!string.IsNullOrWhiteSpace(documentation))
+            {
+                item.Documentation = new MarkupContent
+                {
+                    Kind = _clientCapabilities.CompletionDocumentationKind,
+                    Value = documentation,
+                };
+            }
+
+            break;
+        }
+
+        return item;
+    }
+
+    private static string? GetDocumentationCommentId(object? data)
+    {
+        return data switch
+        {
+            string id => id,
+            JValue value => value.Value<string>(),
+            JObject descriptor => descriptor["documentationCommentId"]?.Value<string>()
+                ?? descriptor["id"]?.Value<string>(),
+            _ => null,
+        };
+    }
+
+    private static string? GetDocumentation(ISymbol symbol)
+    {
+        var xml = symbol.GetDocumentationCommentXml();
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return null;
+        }
+
+        try
+        {
+            var document = XDocument.Parse($"<root>{xml}</root>");
+            var fragments = document.Root?
+                .Descendants()
+                .Where(element => element.Name.LocalName is "summary" or "remarks")
+                .Select(element => NormalizeXmlText(element.Value))
+                .Where(text => !string.IsNullOrWhiteSpace(text));
+            return fragments is null ? null : string.Join("\n\n", fragments);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string NormalizeXmlText(string value)
+    {
+        var lines = value.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0);
+        return string.Join(" ", lines);
     }
 
     private static void AddMembersOf(ITypeSymbol type, List<CompletionItem> items)
@@ -143,6 +238,7 @@ public sealed class CompletionHandler
                     Label = member.Name,
                     Kind = MapSymbolKind(member),
                     Detail = member.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                    Data = member.GetDocumentationCommentId(),
                 });
             }
 
