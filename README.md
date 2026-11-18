@@ -73,6 +73,20 @@ Notes: stdout is reserved for LSP JSON-RPC (diagnostics go to stderr); multi-roo
 
 ---
 
+## 🧩 Why Prefab/Asset Support Matters
+
+Unity projects store GameObjects, components, and serialized fields in `.prefab`, `.unity`, and `.asset` YAML files. Traditional C# LSPs ignore these, so references, renames, and diagnostics stop at the C# boundary. UnityCSharpLSP closes that gap:
+
+- **Cross-asset references & CodeLens**: see exactly which prefabs/scenes/assets use a C# field or method (including Prefab Variants, overrides, and UnityEvent calls) without opening Unity.
+- **Safe refactoring across YAML**: renaming a serialized field or UnityEvent method propagates into `.prefab`/`.unity`/`.asset` files, with `[FormerlySerializedAs]` code actions to preserve serialized data.
+- **YAML navigation**: go-to-definition, hover (with C# signatures, XML docs, `[Tooltip]`), and document symbols work directly inside `.prefab`/`.unity`/`.asset` files.
+- **Hierarchy outlines**: GameObject/Component/PrefabInstance trees for prefabs and scenes.
+- **Missing Script diagnostics**: `UNITY0001` warnings reported directly on asset files.
+- **SceneManager.LoadScene support**: completion and jump-to-scene for `SceneManager.LoadScene("...")`.
+- **No Unity Editor required**: all of the above runs headlessly from YAML + C# metadata, so AI agents and CI can use it.
+
+---
+
 ## ⚖️ Comparison & Trade-offs (Pros & Cons)
 
 How does **UnityCSharpLSP** compare to existing C# language servers (**OmniSharp**, **csharp-ls**, and **VS Code's built-in Roslyn LSP / C# Dev Kit**) when working with Unity projects?
