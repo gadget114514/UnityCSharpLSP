@@ -249,3 +249,169 @@ dotnet test
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## 📖 Feature & Operation Reference
+
+A complete list of the features and operations currently supported by UnityCSharpLSP.
+Last updated: v0.3.1
+
+### 1. Startup & CLI Operations
+
+| Operation | Description |
+| :--- | :--- |
+| `UnityCSharpLSP.Server.exe` | Starts the LSP server over stdio (default) |
+| `--stdio` | Communicates via JSON-RPC over standard input/output |
+| `--editor-path <path>` | Explicitly specifies the Unity Editor installation (auto-detected when omitted) |
+| `--print-config` | Prints an `opencode.json` configuration snippet for OpenCode and exits |
+| `--help` | Shows help |
+
+#### Configuration Example (OpenCode)
+
+```json
+{
+  "lsp": {
+    "unity-csharp-2nek": {
+      "command": ["<path/to/UnityCSharpLSP.Server.exe>", "--stdio"],
+      "extensions": [".cs"]
+    }
+  }
+}
+```
+
+### 2. LSP Lifecycle
+
+| Method | Kind | Description |
+| :--- | :--- | :--- |
+| `initialize` | request | Detects the project root and builds the Roslyn workspace. Advertises server capabilities |
+| `initialized` | notification | Initialization-complete notification |
+| `shutdown` | request | Disposes the workspace and file watchers |
+| `exit` | notification | Terminates the server process |
+
+### 3. Document Synchronization
+
+| Method | Kind | Description |
+| :--- | :--- | :--- |
+| `textDocument/didOpen` | notification | Opens a file, registers it as a Roslyn document, and publishes diagnostics |
+| `textDocument/didChange` | notification | Applies incremental changes in order (full replacement also supported). Re-publishes diagnostics |
+| `textDocument/didSave` | notification | Applies the saved text or the latest content on disk. Re-publishes diagnostics |
+| `textDocument/didClose` | notification | Closes the document, reverts to disk content, and clears diagnostics for that URI |
+| `textDocument/willSave` | notification | Pre-save notification (no edits are made) |
+| `textDocument/willSaveWaitUntil` | request | Returns `TextEdit[]` to apply before saving (currently an empty array) |
+
+Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
+
+### 4. Language Features (Client → Server)
+
+| Method | Description | Implementation |
+| :--- | :--- | :--- |
+| `textDocument/hover` | Shows the symbol signature and XML `<summary>` as Markdown (follows the client's supported formats) | `HoverHandler.cs` |
+| `textDocument/definition` | Jumps to the declaration (reference resolution across `.asmdef` boundaries) | `DefinitionHandler.cs` |
+| `textDocument/typeDefinition` | Jumps to the type declaration of the symbol at the cursor | `TypeDefinitionHandler.cs` |
+| `textDocument/declaration` | Jumps to the symbol declaration (including `OriginalDefinition`) | `DeclarationHandler.cs` |
+| `textDocument/references` | Solution-wide reference search | `ReferencesHandler.cs` |
+| `textDocument/completion` | Member completion, scope completion, and MonoBehaviour message snippet completion | `CompletionHandler.cs` |
+| `completionItem/resolve` | Lazily resolves completion item `Detail` and XML documentation | `CompletionHandler.cs` |
+| `textDocument/documentSymbol` | Hierarchical outline of namespaces, types, and members. Flattened to `SymbolInformation[]` when the client lacks hierarchy support | `DocumentSymbolHandler.cs` |
+| `textDocument/documentHighlight` | Highlights declarations and references within the same file | `DocumentHighlightHandler.cs` |
+| `textDocument/implementation` | Jumps to implementations of interfaces and abstract/virtual members | `ImplementationHandler.cs` |
+| `textDocument/foldingRange` | Folding for namespaces, types, members, blocks, `#region` / `#if`, consecutive usings, and multi-line comments | `FoldingRangeHandler.cs` |
+| `textDocument/selectionRange` | Returns the syntax-node hierarchy at the cursor as selection ranges | `SelectionRangeHandler.cs` |
+| `textDocument/signatureHelp` | Argument signatures and XML documentation for calls, object creation, and attributes | `SignatureHelpHandler.cs` |
+| `textDocument/rename` | Solution-wide rename via `Renamer` with a minimal `WorkspaceEdit` | `RenameHandler.cs` |
+| `textDocument/prepareRename` | Range and placeholder for renameable tokens | `RenameHandler.cs` |
+| `textDocument/prepareCallHierarchy` | Retrieves the callable symbol at the cursor | `CallHierarchyHandler.cs` |
+| `callHierarchy/incomingCalls` | List of callers | `CallHierarchyHandler.cs` |
+| `callHierarchy/outgoingCalls` | List of callees | `CallHierarchyHandler.cs` |
+| `textDocument/prepareTypeHierarchy` | Retrieves the type item that is the starting point of the type hierarchy | `TypeHierarchyHandler.cs` |
+| `typeHierarchy/supertypes` | List of base types and implemented interfaces | `TypeHierarchyHandler.cs` |
+| `typeHierarchy/subtypes` | List of derived classes and implementing types | `TypeHierarchyHandler.cs` |
+| `textDocument/moniker` | Document comment ID with the `csharp` scheme (falls back to the fully qualified name) | `MonikerHandler.cs` |
+| `textDocument/formatting` | Formats the entire document with the Roslyn `Formatter` (honors `FormattingOptions` tab width and spaces, returns a minimal `TextEdit[]`) | `FormattingHandler.cs` |
+| `textDocument/rangeFormatting` | Formats only the specified range | `FormattingHandler.cs` |
+| `textDocument/onTypeFormatting` | Formats the current line when `}`, `;`, or a newline is typed | `FormattingHandler.cs` |
+| `textDocument/codeAction` | Adds `using` or fully qualified names for `CS0246` / `CS0103`, and suppresses any diagnostic with `#pragma warning disable` | `CodeActionHandler.cs` |
+| `codeAction/resolve` | Lazily resolves quick fixes (edits are pre-configured and returned as-is) | `CodeActionHandler.cs` |
+| `textDocument/semanticTokens/full` | Encodes Roslyn classification results into LSP token format (whole document) | `SemanticTokensHandler.cs` |
+| `textDocument/semanticTokens/range` | Semantic tokens for the specified range | `SemanticTokensHandler.cs` |
+| `textDocument/inlayHint` | Inferred type hints for `var` (`: <type>`) and parameter-name hints for arguments (LSP 3.17) | `InlayHintHandler.cs` |
+| `textDocument/codeLens` | Reference-count lenses for types and methods (`N references`) | `CodeLensHandler.cs` |
+| `codeLens/resolve` | Resolves code lenses (the display command is pre-configured) | `CodeLensHandler.cs` |
+| `textDocument/documentLink` | Links file paths found in comments and string literals | `DocumentLinkHandler.cs` |
+| `textDocument/linkedEditingRange` | Linked editing of `#if` / `#elif` / `#define` / `#undef` symbols and `#region` / `#endregion` labels | `LinkedEditingRangeHandler.cs` |
+| `textDocument/inlineValue` | Inline display of `= <value>` for constant-evaluable locals and fields (LSP 3.17) | `InlineValueHandler.cs` |
+| `textDocument/diagnostic` | Pull diagnostics. Returns `unchanged` when `resultId` matches, otherwise `full` (push diagnostics continue as well) | `PullDiagnosticsHandler.cs` |
+| `workspaceSymbol/resolve` | Lazily fills `containerName` / `detail` / `kind` from the `data` of symbols returned by `workspace/symbol` (custom method) | `WorkspaceSymbolHandler.cs` |
+
+#### Client Capability Negotiation
+
+`InitializeParams.Capabilities` received during `initialize` are stored in `ClientCapabilityStore`, and each handler switches the following behaviors:
+
+- Hierarchical `documentSymbol` support (flat `SymbolInformation[]` when unsupported)
+- Document format for hover / completion (`Markdown` / `PlainText`)
+- `prepareRename` support
+- `signatureHelp` context support
+
+#### Signature Help Triggers
+
+- `(` (start of argument list) and `,` (argument separator)
+- Re-triggered on `,`
+
+#### Completion Triggers
+
+- `.` (member access)
+- Inside classes deriving from MonoBehaviour, snippet completion of Unity messages such as `Update` / `Start` / `Awake` / `OnCollisionEnter`
+
+#### On-Type Formatting Triggers
+
+- `}` / `;` / newline (formats the line immediately after input with the Roslyn `Formatter`)
+
+### 5. Workspace Operations
+
+| Method | Kind | Description |
+| :--- | :--- | :--- |
+| `workspace/symbol` | request | Symbol search across all workspace folders and assemblies (no result limit, supports partial results). Uses the LSP 3.17 `WorkspaceSymbol[]` form with `data` / `tags` / `detail` |
+| `workspace/diagnostic` | request | Pull-style workspace diagnostics. Returns reports for all documents with `resultId`, and returns `unchanged` when `previousResultIds` match (also supports partial result tokens) |
+| `workspaceSymbol/resolve` | request | Fills in detailed information from a symbol's `data` (custom method) |
+| `workspace/executeCommand` | request | `unitycsharp.reloadWorkspace` (rebuild the workspace) and `unitycsharp.showWorkspaceInfo` (returns a summary and also notifies via `window/showMessage`) |
+| `workspace/didChangeConfiguration` | notification | Stores settings as a typed object. `enableDiagnostics` toggles push diagnostics on/off, and `predefinedSymbols` is also retained |
+| `workspace/didChangeWatchedFiles` | notification | Detects creation, modification, and deletion of `.cs` files and reflects them in the Roslyn compilation |
+| `workspace/willRenameFiles` | request | Renames types matching the old file name to the new file name via the Roslyn `Renamer`, returning solution-wide `TextEdit[]` in `WorkspaceEdit.Changes` |
+| `workspace/didRenameFiles` | notification | Updates document paths after a rename (removes the old path, adds the new path) |
+| `workspace/willCreateFiles` / `workspace/didCreateFiles` | request / notification | Returns edits inserting a namespace and class skeleton into a new `.cs` / adds the created `.cs` to the workspace |
+| `workspace/willDeleteFiles` / `workspace/didDeleteFiles` | request / notification | Returns `DeleteFile` operations (`ignoreIfNotExists: true`) for the target URIs in `documentChanges` / removes the deleted documents from the workspace |
+
+`initialize` advertises `executeCommandProvider.commands`, `workspace.fileOperations`, `workspaceSymbolProvider.resolveProvider: true`, `diagnosticProvider.workspaceDiagnostics: true`, and `positionEncoding: "utf-16"`.
+
+#### Multi-Root Support
+
+`InitializeParams.WorkspaceFolders` is accepted, and `WorkspaceRouter` creates one `UnityWorkspaceManager` per folder. File URIs are routed to the manager of the longest matching root, and `workspace/symbol` and `executeCommand` operate across all managers. When only `RootUri` / `RootPath` is provided, it behaves as a single root as before.
+
+### 6. Server → Client Notifications
+
+| Method | Description |
+| :--- | :--- |
+| `textDocument/publishDiagnostics` | Publishes Roslyn compiler diagnostics with the target document's `version`. `CS0649` for `[SerializeField]` is suppressed |
+| `$/progress` | Notifies `workspace/symbol` partial results in batches of 100 as `SymbolInformation[]`. Also supports work-done progress for long-running commands (when `workDoneToken` is specified) |
+| `window/showMessage` | Notifies the result of `unitycsharp.showWorkspaceInfo` as an information message |
+
+### 7. Unity-Specific Features
+
+| Feature | Description |
+| :--- | :--- |
+| Unity Editor auto-detection | Detects from Unity Hub's `editors.json`, standard install paths, and `Library/EditorInstance.json` |
+| Managed DLL resolution | Automatically references `UnityEngine.dll` / `UnityEngine.*Module.dll` / `UnityEditor*.dll` |
+| `.asmdef` graph | Parses GUID references, `versionDefines`, `defineConstraints`, and `includePlatforms` to build Roslyn project references |
+| UPM package resolution | Parses `Packages/manifest.json`, `packages-lock.json`, and `Library/PackageCache` |
+| Preprocessor symbols | Automatically defines symbols according to the Unity version, platform, and packages |
+| Diagnostic suppressor | Suppresses false-positive `CS0649` warnings on `[SerializeField]` fields |
+| MonoBehaviour completion | Snippet completion for Unity message methods |
+| Dynamic file monitoring | Reflects new and deleted `.cs` files immediately even without opening the Unity Editor |
+| No `.csproj` / `.sln` required | Builds the Roslyn workspace directly without relying on project files generated by Unity |
+| Nullable | Disabled to match Unity's default (`NullableContextOptions.Disable`) |
+| Multi-root workspace | Manages multiple `workspaceFolders` simultaneously as separate Roslyn workspaces |
+
+### 8. Constraints & Known Limitations
+
+- None in particular.
