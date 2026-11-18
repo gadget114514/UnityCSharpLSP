@@ -58,7 +58,7 @@ public sealed class LspJsonRpcSession : IDisposable
         _rpc.AddLocalRpcTarget(new FoldingRangeHandler(manager));
         _rpc.AddLocalRpcTarget(new SelectionRangeHandler(manager));
         _rpc.AddLocalRpcTarget(new SignatureHelpHandler(manager));
-        _rpc.AddLocalRpcTarget(new RenameHandler(manager));
+        _rpc.AddLocalRpcTarget(new RenameHandler(manager, _settings));
         _rpc.AddLocalRpcTarget(new WorkspaceSymbolHandler(allManagers, _rpc));
         _rpc.AddLocalRpcTarget(new ImplementationHandler(manager));
         _rpc.AddLocalRpcTarget(new CallHierarchyHandler(manager));

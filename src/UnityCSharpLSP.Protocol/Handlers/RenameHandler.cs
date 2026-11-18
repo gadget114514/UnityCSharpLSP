@@ -19,9 +19,12 @@ public sealed class RenameHandler
 {
     private readonly WorkspaceManagerProvider _workspaceManagerProvider;
 
-    public RenameHandler(WorkspaceManagerProvider workspaceManagerProvider)
+    private readonly WorkspaceSettingsStore? _settings;
+
+    public RenameHandler(WorkspaceManagerProvider workspaceManagerProvider, WorkspaceSettingsStore? settings = null)
     {
         _workspaceManagerProvider = workspaceManagerProvider;
+        _settings = settings;
     }
 
     [JsonRpcMethod(RenameMethods.PrepareName, UseSingleObjectParameterDeserialization = true)]
@@ -105,7 +108,10 @@ public sealed class RenameHandler
         }
 
         var workspaceEdit = await CreateWorkspaceEditAsync(solution, renamedSolution, ct).ConfigureAwait(false);
-        await MergeAssetRenameEditsAsync(ws, target.Symbol, @params.NewName, workspaceEdit, ct).ConfigureAwait(false);
+        if (_settings is not null && _settings.Current.PropagateRenamesToAssets)
+        {
+            await MergeAssetRenameEditsAsync(ws, target.Symbol, @params.NewName, workspaceEdit, ct).ConfigureAwait(false);
+        }
         return workspaceEdit;
     }
 

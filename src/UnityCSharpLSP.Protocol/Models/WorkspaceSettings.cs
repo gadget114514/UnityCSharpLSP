@@ -14,6 +14,9 @@ public sealed class WorkspaceSettings
     [JsonProperty("predefinedSymbols")]
     public string[] PredefinedSymbols { get; set; } = Array.Empty<string>();
 
+    [JsonProperty("propagateRenamesToAssets")]
+    public bool PropagateRenamesToAssets { get; set; } = false;
+
     public static WorkspaceSettings From(JToken? settings)
     {
         if (settings is null)
@@ -42,6 +45,12 @@ public sealed class WorkspaceSettings
                 .Where(t => t.Type == JTokenType.String)
                 .Select(t => t.Value<string>()!)
                 .ToArray();
+        }
+
+        var propagate = obj["propagateRenamesToAssets"] ?? obj["propagate_renames_to_assets"];
+        if (propagate is not null && propagate.Type != JTokenType.Null)
+        {
+            result.PropagateRenamesToAssets = propagate.Value<bool>();
         }
 
         return result;
