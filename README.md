@@ -73,6 +73,17 @@ Notes: stdout is reserved for LSP JSON-RPC (diagnostics go to stderr); multi-roo
 
 ---
 
+## 🤝 Coexistence with the Unity Editor
+
+UnityCSharpLSP writes `.prefab`/`.unity`/`.asset` YAML directly and does **not** coordinate with the Unity Editor's serializer. To avoid conflicts:
+
+- **Cross-asset rename propagation is opt-in** (`propagateRenamesToAssets`, default `false`). Enable it only when Unity is closed or you accept LSP as the single writer.
+- When Unity is open, prefer Unity-driven renames for asset files; use the LSP for C#-only refactors.
+- File watchers reconcile external changes, but concurrent edits from both sides can still clash.
+- The asset daemon is one per project root; running multiple LSP instances against the same project root is not supported.
+
+---
+
 ## 🧩 Why Prefab/Asset Support Matters
 
 Unity projects store GameObjects, components, and serialized fields in `.prefab`, `.unity`, and `.asset` YAML files. Traditional C# LSPs ignore these, so references, renames, and diagnostics stop at the C# boundary. UnityCSharpLSP closes that gap:
