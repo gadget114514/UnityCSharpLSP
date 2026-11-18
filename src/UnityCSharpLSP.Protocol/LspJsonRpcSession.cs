@@ -148,7 +148,7 @@ public sealed class LspJsonRpcSession : IDisposable
                 },
                 CompletionProvider = new CompletionOptions
                 {
-                    TriggerCharacters = new[] { "." },
+                    TriggerCharacters = new[] { ".", "\"" },
                     ResolveProvider = true,
                 },
                 DocumentFormattingProvider = true,
@@ -160,7 +160,7 @@ public sealed class LspJsonRpcSession : IDisposable
                 },
                 CodeActionProvider = new CodeActionOptions
                 {
-                    CodeActionKinds = new[] { CodeActionKind.QuickFix, CodeActionKind.Source },
+                    CodeActionKinds = new[] { CodeActionKind.QuickFix, CodeActionKind.Refactor, CodeActionKind.Source },
                     ResolveProvider = true,
                 },
                 SemanticTokensOptions = SemanticTokensHandler.CreateOptions(),

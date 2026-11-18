@@ -5,6 +5,7 @@ using Microsoft.CodeAnalysis.Rename;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.AssetServer.Contracts;
 using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Workspace;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
@@ -103,7 +104,87 @@ public sealed class RenameHandler
             return null;
         }
 
-        return await CreateWorkspaceEditAsync(solution, renamedSolution, ct).ConfigureAwait(false);
+        var workspaceEdit = await CreateWorkspaceEditAsync(solution, renamedSolution, ct).ConfigureAwait(false);
+        await MergeAssetRenameEditsAsync(ws, target.Symbol, @params.NewName, workspaceEdit, ct).ConfigureAwait(false);
+        return workspaceEdit;
+    }
+
+    private static async Task MergeAssetRenameEditsAsync(
+        UnityWorkspaceManager ws,
+        ISymbol symbol,
+        string newName,
+        WorkspaceEdit workspaceEdit,
+        CancellationToken ct)
+    {
+        var query = CreateAssetRenameQuery(symbol, newName);
+        if (query is null)
+        {
+            return;
+        }
+
+        var assetEdits = await ws.AssetService.ComputeRenameEditsAsync(query, ct).ConfigureAwait(false);
+        if (assetEdits?.FileEdits is null || assetEdits.FileEdits.Length == 0)
+        {
+            return;
+        }
+
+        workspaceEdit.Changes ??= new Dictionary<string, TextEdit[]>();
+        foreach (var fileEdit in assetEdits.FileEdits)
+        {
+            if (string.IsNullOrWhiteSpace(fileEdit.FullPath) || fileEdit.Edits is null || fileEdit.Edits.Length == 0)
+            {
+                continue;
+            }
+
+            var uri = new Uri(Path.GetFullPath(fileEdit.FullPath)).AbsoluteUri;
+            var converted = fileEdit.Edits
+                .Select(edit => new TextEdit
+                {
+                    Range = new LspRange
+                    {
+                        Start = new Position(edit.Line, edit.StartCharacter),
+                        End = new Position(edit.Line, edit.EndCharacter),
+                    },
+                    NewText = edit.NewText ?? string.Empty,
+                })
+                .ToArray();
+
+            workspaceEdit.Changes[uri] = workspaceEdit.Changes.TryGetValue(uri, out var existing)
+                ? existing.Concat(converted).ToArray()
+                : converted;
+        }
+    }
+
+    private static AssetRenameQueryDto? CreateAssetRenameQuery(ISymbol symbol, string newName)
+    {
+        if (string.Equals(symbol.Name, newName, StringComparison.Ordinal) ||
+            !UnitySymbolGuidHelper.TryGetScriptGuid(symbol, out var scriptGuid))
+        {
+            return null;
+        }
+
+        return symbol switch
+        {
+            IFieldSymbol field when UnitySymbolGuidHelper.IsUnityObjectType(field.ContainingType) &&
+                                    UnitySymbolGuidHelper.IsSerializableField(field) =>
+                new AssetRenameQueryDto
+                {
+                    ScriptGuid = scriptGuid,
+                    MemberKind = AssetMemberKind.Field,
+                    OldName = field.Name,
+                    NewName = newName,
+                },
+            IMethodSymbol method when method.MethodKind == MethodKind.Ordinary &&
+                                      UnitySymbolGuidHelper.IsUnityObjectType(method.ContainingType) =>
+                new AssetRenameQueryDto
+                {
+                    ScriptGuid = scriptGuid,
+                    MemberKind = AssetMemberKind.Method,
+                    OldName = method.Name,
+                    NewName = newName,
+                },
+            _ => null,
+        };
     }
 
     internal static async Task<WorkspaceEdit> CreateWorkspaceEditAsync(

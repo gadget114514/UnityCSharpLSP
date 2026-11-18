@@ -23,31 +23,31 @@ Traditional C# language servers (OmniSharp, csharp-ls, Microsoft C# Dev Kit / Ro
 #### Goals
 - **Autonomous Resolution without Unity Editor**: Open a Unity project directory and immediately resolve `.asmdef`, packages, and Managed DLLs without needing the Unity Editor to be running.
 - **Fast Incremental Updates**: Use Roslyn's immutable solution data structure to respond to keystroke text edits in tens of milliseconds.
-- **First-Class Unity Support**: Unity message completions (Magic Methods), suppression of false warnings on `[SerializeField]`, and seamless Editor/Runtime configuration awareness.
+- **First-Class Unity Support**: Unity message completions (Magic Methods), suppression of false warnings on `[SerializeField]` (`CS0649`) and `UnityEvent`-referenced methods (`IDE0051`), and seamless Editor/Runtime configuration awareness.
+- **Bidirectional Prefab / Scene Intelligence**: Index `.meta` GUIDs, `.prefab`, `.unity` scenes, `.asset` files, and `EditorBuildSettings.asset` in a shared per-project `--asset-daemon` backed by SQLite (WAL + mmap) and an in-memory reference graph, enabling cross-asset Find References, CodeLens counts, Rename propagation, YAML navigation/symbols, `UNITY0001` diagnostics, and `SceneManager.LoadScene` completion/navigation.
 - **Cross-Platform Single Binary**: Run as a single, self-contained binary across Windows, macOS, and Linux editors (VS Code, Neovim, Zed, Helix, etc.).
 
-#### Non-Goals (Initial Scope)
-- Serialized data parsing for `.unity` scene or `.prefab` files.
-- Non-C# languages (ShaderLab, HLSL, UXML, USS).
+#### Non-Goals (Scope Boundaries)
+- Non-C# shader/UI languages (ShaderLab, HLSL, UXML, USS).
 - Running full player builds (delegated to Unity Editor / CLI).
 
 ---
 
 ## 1. System Architecture
 
-The architecture consists of four distinct layers:
+The architecture uses a split frontend + per-project daemon model (packaged in the same `UnityCSharpLSP.Server` binary):
 
 ```
 [ Editors / AI Clients (VS Code / Neovim / Zed / OpenCode) ]
-                          │  JSON-RPC (stdio / named pipe / socket)
+                          │  JSON-RPC (stdio)
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Unity C# LSP Server                         │
+│                Frontend C# LSP (--stdio)                        │
 ├─────────────────────────────────────────────────────────────────┤
 │ 1. LSP Protocol Layer (StreamJsonRpc / LSP Protocol Models)     │
 │    - JSON-RPC message dispatching                               │
 │    - Lifecycle management (initialize, initialized, shutdown,   │
-│      exit)                                                      │
+│      exit) & multi-root WorkspaceRouter                         │
 │    - Concurrency control & CancellationToken propagation        │
 ├─────────────────────────────────────────────────────────────────┤
 │ 2. Unity Workspace Engine                                       │
@@ -64,13 +64,26 @@ The architecture consists of four distinct layers:
 ├─────────────────────────────────────────────────────────────────┤
 │ 4. Unity Semantic & Language Providers                          │
 │    - Diagnostics provider (Roslyn diagnostics + suppressors)   │
-│    - Hover & quick info provider (signatures + XML summaries)   │
-│    - Completion provider (member lookup + MonoBehaviour message)│
-│    - Definition / reference provider (cross-assembly AST walk)  │
-│    - Implementation, document/workspace symbol providers        │
-│    - Call hierarchy provider (incoming/outgoing calls)          │
+│    - Hover, Definition, DocumentLink, DocumentSymbol, Completion│
+│    - References, CodeLens, Rename, CodeAction (+ AssetServer)   │
+│    - Implementation, Call/TypeHierarchy, WorkspaceSymbol        │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │ Named Pipe IPC (StreamJsonRpc / IAssetDataService)
+                          │ (auto-spawned or in-process fallback)
+                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│        Persistent Unity Asset Data Daemon (--asset-daemon)      │
+├─────────────────────────────────────────────────────────────────┤
+│ - AssetDaemonHost / AssetDataServiceImpl (1 process per root)   │
+│ - Zero-allocation UTF-8 scanner (FastUnityYamlScanner)          │
+│ - HierarchyBuilder & BuildSettingsParser                        │
+│ - SQLite store (WAL + mmap: Library/UnityCSharpLSP/asset-db.sqlite) │
+│ - InMemoryAssetGraph (transitive Script -> Prefab -> Scene BFS) │
+│ - Debounced AssetFileWatcher (.meta, .prefab, .unity, .asset)   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+> For the detailed design of the asset daemon, SQLite schema, and zero-allocation YAML scanner, see [doc/prefabserver.md](prefabserver.md) and [doc/prefabserver-detaildesign.md](prefabserver-detaildesign.md).
 
 ---
 
@@ -161,16 +174,20 @@ sequenceDiagram
 | `textDocument/didOpen` | File opened | Tracks in-memory document, publishes diagnostics |
 | `textDocument/didChange` | Full text update | Applies `WithDocumentText`, triggers diagnostics |
 | `textDocument/didClose` | File closed | Flushes dirty state, re-syncs with disk |
-| `textDocument/publishDiagnostics` | Diagnostics | Compiles via Roslyn; suppresses `CS0649` on `[SerializeField]` |
-| `textDocument/hover` | Hover tooltips | Resolves `ISymbol` at offset, formats signature and XML summary |
-| `textDocument/definition` | Go to definition | Resolves declaration AST node, handles cross-asmdef jumps |
-| `textDocument/completion` | Code completion | Member completions, scope lookup, and MonoBehaviour magic methods |
-| `textDocument/references` | Find references | Solution-wide symbol search via `SymbolFinder` |
+| `textDocument/publishDiagnostics` | Diagnostics | Compiles via Roslyn; suppresses `CS0649` on `[SerializeField]` and `IDE0051` on `UnityEvent` methods; publishes `UNITY0001` (Missing Script) for `.prefab`/`.unity`/`.asset` |
+| `textDocument/hover` | Hover tooltips | Resolves `ISymbol` at offset, formats signature and XML summary; for `.prefab`/`.unity`/`.asset`, merges AssetServer hover with C# signature, XML docs, and `[Tooltip]` |
+| `textDocument/definition` | Go to definition | Resolves declaration AST node across `.asmdef`; navigates YAML `guid:`/field lines to C#/assets; jumps from `SceneManager.LoadScene`/`LoadSceneAsync` strings to `.unity` |
+| `textDocument/completion` | Code completion | Member completions, scope lookup, MonoBehaviour magic methods, and `SceneManager.LoadScene`/`LoadSceneAsync` enabled build scene names (`CompletionItemKind.File`) |
+| `textDocument/references` | Find references | Solution-wide C# search via `SymbolFinder` merged with direct and transitive `.prefab`/`.unity`/`.asset` references (script attachments, fields, overrides, `UnityEvent` calls) |
+| `textDocument/codeLens` | CodeLens | Reference counts on types/methods; shows `"N references (P prefabs, S scenes)"` and asset locations for `MonoBehaviour`/`ScriptableObject` |
+| `textDocument/rename` | Rename | Solution-wide C# rename via Roslyn `Renamer` merged with YAML key, `propertyPath`, and `m_MethodName` edits in `.prefab`/`.unity`/`.asset` |
+| `textDocument/codeAction` | Code actions | `CS0246`/`CS0103` `using` & FQN quick fixes, `#pragma warning disable`, and `Add [FormerlySerializedAs("<field>")]` refactoring for Unity serializable fields |
+| `textDocument/documentLink` | Document links | File paths in comments/strings, `SceneManager.LoadScene`/`LoadSceneAsync` scene strings, and `guid:` links in `.prefab`/`.unity`/`.asset` |
 | `textDocument/implementation` | Go to implementation | `SymbolFinder.FindImplementationsAsync` for interfaces/overrides |
-| `textDocument/documentSymbol` | Document outline | Hierarchical `DocumentSymbol` tree built from declared semantic symbols |
-| `workspace/symbol` | Workspace symbols | Searches every workspace root/project with `Compilation.GetSymbolsWithName`; emits custom-data `SymbolInformation` and supports partial results |
+| `textDocument/documentSymbol` | Document outline | Hierarchical `DocumentSymbol` tree for C# symbols, or GameObject/Component/PrefabInstance hierarchy tree for `.prefab`/`.unity` |
+| `workspace/symbol` | Workspace symbols | Searches every workspace root/project with `Compilation.GetSymbolsWithName`; emits custom-data `WorkspaceSymbol` and supports partial results |
 | `workspaceSymbol/resolve` | Symbol resolve (custom) | Fills `containerName`, `detail` and `kind` from the `data` payload carried by `workspace/symbol` |
-| `workspace/executeCommand` | Commands | `unitycsharp.reloadWorkspace` rebuilds all roots; `unitycsharp.showWorkspaceInfo` emits `window/showMessage` and returns a summary; optional `$/progress` work-done tokens |
+| `workspace/executeCommand` | Commands | `unitycsharp.reloadWorkspace` (rebuilds roots + rescans AssetServer), `unitycsharp.showWorkspaceInfo`, `unitycsharp.getSceneOrPrefabHierarchy`, `unitycsharp.findSymbolUsagesInAssets`, `unitycsharp.assetServerStatus` |
 | `workspace/didChangeConfiguration` | Settings | Stores typed `enableDiagnostics` / `predefinedSymbols`; gates push-diagnostic publication |
 | `workspace/willRenameFiles` / `didRenameFiles` | Rename events | `will` returns no edits; `did` removes the old document and adds the new one in the owning workspace |
 | `workspace/willCreateFiles` / `didCreateFiles` | Create events | `will` returns no edits; `did` adds new `.cs` files from disk |
@@ -192,8 +209,14 @@ sequenceDiagram
 ```
 UnityCSharpLSP/
 ├── src/
-│   ├── UnityCSharpLSP.Server/              # Entry point CLI (stdio, options)
+│   ├── UnityCSharpLSP.Server/              # Entry point CLI (--stdio, --asset-daemon, options)
 │   │   └── Program.cs
+│   │
+│   ├── UnityCSharpLSP.AssetServer/         # Persistent Unity asset data daemon & SQLite/YAML engine
+│   │   ├── Contracts/                      # IAssetDataService & RPC DTOs
+│   │   ├── Daemon/                         # AssetDaemonHost, AssetDaemonClient, AssetDataServiceImpl, AssetFileWatcher
+│   │   ├── Parsing/                        # FastUnityYamlScanner, HierarchyBuilder, MetaFileParser, UnityYamlSpanReader
+│   │   └── Storage/                        # AssetGuid, AssetSqliteStore, InMemoryAssetGraph, BuildSettingsParser
 │   │
 │   ├── UnityCSharpLSP.Protocol/            # LSP JSON-RPC handlers
 │   │   ├── Handlers/
@@ -202,15 +225,23 @@ UnityCSharpLSP/
 │   │   │   ├── DefinitionHandler.cs
 │   │   │   ├── CompletionHandler.cs
 │   │   │   ├── ReferencesHandler.cs
+│   │   │   ├── CodeLensHandler.cs
+│   │   │   ├── RenameHandler.cs
+│   │   │   ├── CodeActionHandler.cs
+│   │   │   ├── DocumentLinkHandler.cs
+│   │   │   ├── SceneManagerCallHelper.cs
+│   │   │   ├── ExecuteCommandHandler.cs
 │   │   │   ├── ImplementationHandler.cs
 │   │   │   ├── DocumentSymbolHandler.cs
 │   │   │   ├── WorkspaceSymbolHandler.cs
 │   │   │   ├── CallHierarchyHandler.cs
 │   │   │   ├── DiagnosticsHandler.cs
+│   │   │   ├── PullDiagnosticsHandler.cs
 │   │   │   └── WatchedFilesHandler.cs
 │   │   ├── Models/
 │   │   │   ├── CallHierarchy.cs
 │   │   │   └── ExtendedServerCapabilities.cs
+│   │   ├── WorkspaceRouter.cs
 │   │   └── LspJsonRpcSession.cs
 │   │
 │   ├── UnityCSharpLSP.Workspace/           # Unity workspace engine & Roslyn host
@@ -226,7 +257,9 @@ UnityCSharpLSP/
 │   │   │   ├── AsmdefFile.cs
 │   │   │   ├── UnityProjectInfo.cs
 │   │   │   └── VersionDefine.cs
+│   │   ├── UnityAssetFileHelper.cs
 │   │   ├── UnityProjectLoader.cs
+│   │   ├── UnitySymbolGuidHelper.cs
 │   │   ├── UnityWorkspaceManager.cs
 │   │   └── WorkspaceWatcher.cs
 │   │
@@ -237,10 +270,11 @@ UnityCSharpLSP/
 │           └── MonoBehaviourMessages.cs
 │
 ├── tests/
+│   ├── UnityCSharpLSP.AssetServer.Tests/   # AssetServer YAML, SQLite, graph & Named Pipe IPC tests
 │   ├── UnityCSharpLSP.Workspace.Tests/     # Workspace engine & Roslyn tests
 │   └── UnityCSharpLSP.Protocol.Tests/      # End-to-end LSP protocol tests
 │
-└── DummyProject/                           # Unity test project with multiple asmdefs
+└── DummyProject/                           # Unity test project with multiple asmdefs, prefabs & scenes
     ├── Assets/
     ├── Packages/
     └── ProjectSettings/

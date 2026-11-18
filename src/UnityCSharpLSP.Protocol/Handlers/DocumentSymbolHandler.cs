@@ -2,8 +2,11 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.AssetServer.Contracts;
 using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Workspace;
+using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
+using LspSymbolKind = Microsoft.VisualStudio.LanguageServer.Protocol.SymbolKind;
 
 namespace UnityCSharpLSP.Protocol.Handlers;
 
@@ -32,10 +35,28 @@ public sealed class DocumentSymbolHandler
             return null;
         }
 
-        var doc = ws.GetDocument(@params.TextDocument.Uri.LocalPath);
+        var filePath = @params.TextDocument.Uri.LocalPath;
+        var doc = ws.GetDocument(filePath);
         if (doc is null)
         {
-            return null;
+            if (!UnityAssetFileHelper.IsYamlAssetFile(filePath))
+            {
+                return null;
+            }
+
+            var hierarchy = await ws.AssetService.GetHierarchyAsync(
+                filePath,
+                maxDepth: 16,
+                includeSerializedValues: false,
+                ct).ConfigureAwait(false);
+
+            if (hierarchy.Length == 0)
+            {
+                return null;
+            }
+
+            var assetSymbols = hierarchy.Select(ToDocumentSymbol).ToList();
+            return FormatResult(assetSymbols, @params.TextDocument.Uri);
         }
 
         var root = await doc.GetSyntaxRootAsync(ct).ConfigureAwait(false);
@@ -95,6 +116,11 @@ public sealed class DocumentSymbolHandler
             }
         }
 
+        return FormatResult(topLevel, @params.TextDocument.Uri);
+    }
+
+    private object? FormatResult(List<DocumentSymbol> topLevel, Uri documentUri)
+    {
         if (topLevel.Count == 0)
         {
             return null;
@@ -108,10 +134,57 @@ public sealed class DocumentSymbolHandler
         var flatSymbols = new List<SymbolInformation>();
         foreach (var symbol in topLevel)
         {
-            Flatten(symbol, @params.TextDocument.Uri, containerName: null, flatSymbols);
+            Flatten(symbol, documentUri, containerName: null, flatSymbols);
         }
 
         return flatSymbols.ToArray();
+    }
+
+    private static DocumentSymbol ToDocumentSymbol(AssetHierarchyNodeDto node)
+    {
+        var line = Math.Max(0, node.Line);
+        var pos = new Position(line, 0);
+        var range = new LspRange { Start = pos, End = pos };
+
+        var children = new List<DocumentSymbol>();
+
+        foreach (var comp in node.Components)
+        {
+            var compLine = Math.Max(0, comp.Line);
+            var compPos = new Position(compLine, 0);
+            var compRange = new LspRange { Start = compPos, End = compPos };
+            var typeName = string.IsNullOrWhiteSpace(comp.TypeName)
+                ? $"Component_{comp.ClassId}"
+                : comp.TypeName;
+
+            children.Add(new DocumentSymbol
+            {
+                Name = typeName,
+                Detail = !string.IsNullOrWhiteSpace(comp.ScriptPath) ? comp.ScriptPath : typeName,
+                Kind = LspSymbolKind.Class,
+                Range = compRange,
+                SelectionRange = compRange,
+            });
+        }
+
+        foreach (var child in node.Children)
+        {
+            children.Add(ToDocumentSymbol(child));
+        }
+
+        var detail = node.IsPrefabInstance && !string.IsNullOrWhiteSpace(node.SourcePrefabPath)
+            ? node.SourcePrefabPath
+            : null;
+
+        return new DocumentSymbol
+        {
+            Name = string.IsNullOrWhiteSpace(node.Name) ? "GameObject" : node.Name,
+            Detail = detail,
+            Kind = LspSymbolKind.Object,
+            Range = range,
+            SelectionRange = range,
+            Children = children.Count > 0 ? children.ToArray() : null,
+        };
     }
 
     private static void Flatten(

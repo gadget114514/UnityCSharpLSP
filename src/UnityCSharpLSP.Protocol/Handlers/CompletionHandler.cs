@@ -68,9 +68,15 @@ public sealed class CompletionHandler
         }
 
         var root = await syntaxTree.GetRootAsync(ct).ConfigureAwait(false);
-        var token = root.FindToken(position > 0 ? position - 1 : 0);
-
         var items = new List<CompletionItem>();
+
+        if (SceneManagerCallHelper.TryGetSceneNameCompletionContext(root, semanticModel, position, ct, out _))
+        {
+            await AddBuildSceneCompletionsAsync(ws, items, ct).ConfigureAwait(false);
+            return items.Count > 0 ? items.ToArray() : null;
+        }
+
+        var token = root.FindToken(position > 0 ? position - 1 : 0);
 
         // Check for member access (e.g. "foo.")
         if (token.IsKind(SyntaxKind.DotToken) && token.Parent is MemberAccessExpressionSyntax memberAccess)
@@ -212,6 +218,49 @@ public sealed class CompletionHandler
             .Select(line => line.Trim())
             .Where(line => line.Length > 0);
         return string.Join(" ", lines);
+    }
+
+    private static async Task AddBuildSceneCompletionsAsync(
+        UnityWorkspaceManager ws,
+        List<CompletionItem> items,
+        CancellationToken ct)
+    {
+        var buildScenes = await ws.AssetService.GetBuildScenesAsync(ct).ConfigureAwait(false);
+        if (buildScenes.Length == 0)
+        {
+            return;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var scene in buildScenes)
+        {
+            if (!scene.Enabled)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(scene.SceneName) && seen.Add(scene.SceneName))
+            {
+                items.Add(new CompletionItem
+                {
+                    Label = scene.SceneName,
+                    Kind = CompletionItemKind.File,
+                    Detail = $"Build Scene #{scene.BuildIndex}: {scene.RelativePath}",
+                    Documentation = scene.FullPath,
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(scene.RelativePath) && seen.Add(scene.RelativePath))
+            {
+                items.Add(new CompletionItem
+                {
+                    Label = scene.RelativePath,
+                    Kind = CompletionItemKind.File,
+                    Detail = $"Build Scene #{scene.BuildIndex}: {scene.SceneName}",
+                    Documentation = scene.FullPath,
+                });
+            }
+        }
     }
 
     private static void AddMembersOf(ITypeSymbol type, List<CompletionItem> items)

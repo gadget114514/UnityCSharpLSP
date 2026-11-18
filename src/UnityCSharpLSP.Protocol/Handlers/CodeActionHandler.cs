@@ -59,6 +59,8 @@ public sealed class CodeActionHandler
             actions.Add(CreatePragmaAction(filePath, diagnostic, code));
         }
 
+        actions.AddRange(await CreateFormerlySerializedAsActionsAsync(document, @params.Range, ct).ConfigureAwait(false));
+
         return actions.ToArray();
     }
 
@@ -178,6 +180,117 @@ public sealed class CodeActionHandler
         }
 
         return actions;
+    }
+
+    private static async Task<IEnumerable<CodeAction>> CreateFormerlySerializedAsActionsAsync(
+        Document document,
+        LspRange? requestedRange,
+        CancellationToken ct)
+    {
+        if (requestedRange is null || string.IsNullOrEmpty(document.FilePath))
+        {
+            return Array.Empty<CodeAction>();
+        }
+
+        var text = await document.GetTextAsync(ct).ConfigureAwait(false);
+        var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
+        var semanticModel = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
+        if (root is null || semanticModel is null)
+        {
+            return Array.Empty<CodeAction>();
+        }
+
+        var requestedSpan = LspTextMapper.ToSpan(text, requestedRange);
+        var fileUri = new Uri(Path.GetFullPath(document.FilePath)).AbsoluteUri;
+        var actions = new List<CodeAction>();
+
+        foreach (var fieldDecl in root.DescendantNodes().OfType<FieldDeclarationSyntax>())
+        {
+            if (!fieldDecl.Span.IntersectsWith(requestedSpan) ||
+                fieldDecl.Declaration.Variables.Count == 0)
+            {
+                continue;
+            }
+
+            var matchingVars = fieldDecl.Declaration.Variables
+                .Where(v => v.Span.IntersectsWith(requestedSpan))
+                .ToArray();
+            var candidateVars = matchingVars.Length > 0
+                ? matchingVars
+                : fieldDecl.Declaration.Variables.ToArray();
+
+            foreach (var variable in candidateVars)
+            {
+                if (semanticModel.GetDeclaredSymbol(variable, ct) is not IFieldSymbol fieldSymbol ||
+                    !UnitySymbolGuidHelper.IsUnityObjectType(fieldSymbol.ContainingType) ||
+                    !UnitySymbolGuidHelper.IsSerializableField(fieldSymbol) ||
+                    HasFormerlySerializedAsAttribute(fieldSymbol, fieldDecl))
+                {
+                    continue;
+                }
+
+                var startLine = text.Lines.GetLineFromPosition(fieldDecl.SpanStart);
+                var prefixText = text.ToString(TextSpan.FromBounds(startLine.Start, fieldDecl.SpanStart));
+                var isFirstOnLine = string.IsNullOrWhiteSpace(prefixText);
+                var lineEnding = startLine.EndIncludingLineBreak > startLine.End
+                    ? text.ToString(TextSpan.FromBounds(startLine.End, startLine.EndIncludingLineBreak))
+                    : "\n";
+                var attributeText = $"[UnityEngine.Serialization.FormerlySerializedAs(\"{fieldSymbol.Name}\")]";
+                var newText = isFirstOnLine
+                    ? $"{attributeText}{lineEnding}{prefixText}"
+                    : $"{attributeText} ";
+
+                actions.Add(new CodeAction
+                {
+                    Title = $"Add [FormerlySerializedAs(\"{fieldSymbol.Name}\")]",
+                    Kind = CodeActionKind.Refactor,
+                    Edit = new WorkspaceEdit
+                    {
+                        Changes = new Dictionary<string, TextEdit[]>
+                        {
+                            [fileUri] =
+                            [
+                                new TextEdit
+                                {
+                                    Range = LspTextMapper.ToRange(text, fieldDecl.SpanStart),
+                                    NewText = newText,
+                                },
+                            ],
+                        },
+                    },
+                });
+            }
+        }
+
+        return actions;
+    }
+
+    private static bool HasFormerlySerializedAsAttribute(IFieldSymbol fieldSymbol, FieldDeclarationSyntax fieldDecl)
+    {
+        foreach (var attr in fieldSymbol.GetAttributes())
+        {
+            var name = attr.AttributeClass?.Name;
+            if (name is "FormerlySerializedAs" or "FormerlySerializedAsAttribute")
+            {
+                return true;
+            }
+        }
+
+        foreach (var attrList in fieldDecl.AttributeLists)
+        {
+            foreach (var attr in attrList.Attributes)
+            {
+                var rawName = attr.Name.ToString();
+                var dotIndex = rawName.LastIndexOf('.');
+                var simpleName = dotIndex >= 0 ? rawName[(dotIndex + 1)..] : rawName;
+                if (simpleName is "FormerlySerializedAs" or "FormerlySerializedAsAttribute")
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static string? GetDiagnosticCode(LspDiagnostic diagnostic)

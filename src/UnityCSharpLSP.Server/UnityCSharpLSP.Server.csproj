@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\UnityCSharpLSP.Protocol\UnityCSharpLSP.Protocol.csproj" />
     <ProjectReference Include="..\UnityCSharpLSP.Workspace\UnityCSharpLSP.Workspace.csproj" />
+    <ProjectReference Include="..\UnityCSharpLSP.AssetServer\UnityCSharpLSP.AssetServer.csproj" />
   </ItemGroup>
 
 </Project>

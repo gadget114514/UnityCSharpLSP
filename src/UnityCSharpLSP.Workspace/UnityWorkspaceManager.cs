@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
+using UnityCSharpLSP.AssetServer.Contracts;
+using UnityCSharpLSP.AssetServer.Daemon;
 using UnityCSharpLSP.Workspace.Defines;
 using UnityCSharpLSP.Workspace.Graph;
 using UnityCSharpLSP.Workspace.Models;
@@ -16,6 +18,7 @@ public sealed class UnityWorkspaceManager : IDisposable
 {
     private readonly AdhocWorkspace _workspace;
     private readonly object _solutionLock = new();
+    private readonly bool _ownsAssetService;
 
     private readonly ConcurrentDictionary<string, ProjectId> _projectIdsByName = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DocumentId> _documentIdsByPath = new(StringComparer.OrdinalIgnoreCase);
@@ -24,15 +27,29 @@ public sealed class UnityWorkspaceManager : IDisposable
 
     public UnityProjectInfo ProjectInfo { get; }
     public AsmdefGraph AssemblyGraph { get; }
+    public IAssetDataService AssetService { get; }
     public Microsoft.CodeAnalysis.Workspace RoslynWorkspace => _workspace;
 
     public Solution CurrentSolution => _workspace.CurrentSolution;
 
-    public UnityWorkspaceManager(UnityProjectInfo projectInfo, AsmdefGraph assemblyGraph)
+    public UnityWorkspaceManager(
+        UnityProjectInfo projectInfo,
+        AsmdefGraph assemblyGraph,
+        IAssetDataService? assetService = null)
     {
         ProjectInfo = projectInfo;
         AssemblyGraph = assemblyGraph;
         _workspace = new AdhocWorkspace();
+        if (assetService is not null)
+        {
+            AssetService = assetService;
+            _ownsAssetService = false;
+        }
+        else
+        {
+            AssetService = AssetDaemonClient.CreateOrFallbackInProcess(ProjectInfo.ProjectRootPath);
+            _ownsAssetService = true;
+        }
 
         InitializeSolution();
     }
@@ -41,7 +58,10 @@ public sealed class UnityWorkspaceManager : IDisposable
     /// Factory method that scans the Unity project root, builds the assembly graph,
     /// and initializes the Roslyn workspace.
     /// </summary>
-    public static UnityWorkspaceManager Create(string projectRoot, string? explicitEditorPath = null)
+    public static UnityWorkspaceManager Create(
+        string projectRoot,
+        string? explicitEditorPath = null,
+        IAssetDataService? assetService = null)
     {
         var projectInfo = UnityProjectLoader.Load(projectRoot, explicitEditorPath);
 
@@ -50,7 +70,7 @@ public sealed class UnityWorkspaceManager : IDisposable
         var searchRoot = Directory.Exists(assetsDir) ? assetsDir : projectInfo.ProjectRootPath;
         var graph = AsmdefGraphBuilder.Build(searchRoot);
 
-        return new UnityWorkspaceManager(projectInfo, graph);
+        return new UnityWorkspaceManager(projectInfo, graph, assetService);
     }
 
     private void InitializeSolution()
@@ -710,6 +730,11 @@ public sealed class UnityWorkspaceManager : IDisposable
 
     public void Dispose()
     {
+        if (_ownsAssetService && AssetService is IDisposable disposableAssetService)
+        {
+            disposableAssetService.Dispose();
+        }
+
         _workspace.Dispose();
     }
 

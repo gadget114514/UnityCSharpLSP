@@ -17,28 +17,59 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
   - Works out of the box right after `git clone`—no need to open the Unity Editor to regenerate project files!
 - **🔍 Unity-Aware Diagnostics & Suppressors**:
   - Real-time Roslyn compiler error/warning diagnostics.
-  - Suppresses false-positive `CS0649` ("Field is never assigned to...") warnings on `[SerializeField]` private fields.
+  - Suppresses false-positive `CS0649` warnings on `[SerializeField]` private fields and `IDE0051` unused-method warnings on methods referenced by `UnityEvent` in `.prefab` / `.unity` assets.
+  - Reports Missing Script (`UNITY0001`) warnings directly on `.prefab`, `.unity`, and `.asset` files.
+- **🧩 Prefab & Scene Bidirectional Intelligence (`--asset-daemon`)**:
+  - **Shared Persistent Asset Data Daemon**: Automatically spawns one lightweight `--asset-daemon` process per project root over Named Pipe (`StreamJsonRpc`), backed by a zero-allocation UTF-8 YAML scanner, an in-memory reference graph, and SQLite (WAL + mmap) at `Library/UnityCSharpLSP/asset-db.sqlite` (with automatic in-process fallback when needed).
+  - **Cross-Asset References & CodeLens**: `textDocument/references` and `textDocument/codeLens` resolve direct and transitive `.prefab` / `.unity` / `.asset` usages (including Prefab Variants, serialized fields, `m_Modifications` overrides, and `UnityEvent` calls).
+  - **Safe Refactoring Across YAML**: `textDocument/rename` propagates serialized field and `UnityEvent` method renames into `.prefab` / `.unity` / `.asset` files; `textDocument/codeAction` offers `Add [FormerlySerializedAs("<fieldName>")]`.
+  - **YAML Navigation & Hierarchy Outline**: `textDocument/documentLink`, `textDocument/definition`, `textDocument/hover` (enriched with C# signatures, XML docs, and `[Tooltip]`), and `textDocument/documentSymbol` work directly on `.prefab`, `.unity`, and `.asset` files.
+  - **`SceneManager.LoadScene` Support**: Completes enabled scenes from `ProjectSettings/EditorBuildSettings.asset` inside `SceneManager.LoadScene("` / `LoadSceneAsync("` and links/jumps directly to the `.unity` scene file.
 - **⚡ Core Language Server Features**:
-  - **Go to Definition (`textDocument/definition`)**: Seamless navigation across `.asmdef` boundaries via Roslyn project references.
-  - **Hover Tooltips (`textDocument/hover`)**: Rich method and type signatures with XML `<summary>` doc comments.
-  - **Code Completion (`textDocument/completion`)**: Dot member access completions, local/type completions, and **MonoBehaviour Magic Methods snippet completions** (`Update`, `Start`, `Awake`, `OnCollisionEnter`, etc.).
-  - **Find References (`textDocument/references`)**: Solution-wide symbol search across all assemblies.
+  - **Go to Definition (`textDocument/definition`)**: Seamless navigation across `.asmdef` boundaries, YAML asset references, and `SceneManager.LoadScene` calls.
+  - **Hover Tooltips (`textDocument/hover`)**: Rich method and type signatures with XML `<summary>` doc comments (plus `[Tooltip]` enrichment when hovering serialized fields in YAML).
+  - **Code Completion (`textDocument/completion`)**: Dot member access completions, local/type completions, **MonoBehaviour Magic Methods snippet completions**, and **Build Scene completions** inside `SceneManager.LoadScene`.
+  - **Find References (`textDocument/references`)**: Solution-wide C# symbol search combined with direct & transitive `.prefab` / `.unity` / `.asset` usages.
   - **Go to Implementation (`textDocument/implementation`)**: Jump from interfaces and abstract/virtual members to their implementations.
-  - **Document Symbols (`textDocument/documentSymbol`)**: Hierarchical outline of namespaces, types, and members for the current file.
-   - **Workspace Symbols (`workspace/symbol`, `workspaceSymbol/resolve`)**: Project-wide symbol search by name with lazily resolved symbol details.
-   - **Call Hierarchy (`textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`)**: Explore callers and callees using Roslyn semantic analysis.
-   - **Will-Save Hooks (`textDocument/willSave`, `textDocument/willSaveWaitUntil`)**: Standard save lifecycle support.
- - **🗂 Multi-Root Workspaces**:
-   - Accepts multiple `workspaceFolders`; a `WorkspaceRouter` builds one Roslyn workspace per root and routes each document to the longest matching root prefix. Single-root (`rootUri` / `rootPath`) behaviour is unchanged.
- - **🧩 Workspace Commands & Configuration**:
-   - `workspace/executeCommand` supports `unitycsharp.reloadWorkspace` (rebuild from project roots) and `unitycsharp.showWorkspaceInfo` (projects/assemblies/documents summary).
-   - `workspace/didChangeConfiguration` stores typed settings (`enableDiagnostics`, `predefinedSymbols`) and can disable diagnostic publication.
-   - Full file-operation events (`workspace/willCreateFiles` / `didCreateFiles`, `willRenameFiles` / `didRenameFiles`, `willDeleteFiles` / `didDeleteFiles`) keep the workspace in sync with editor file changes.
-   - Advertises `positionEncoding: utf-16` and work-done progress for long-running commands.
- - **👀 Dynamic File Monitoring**:
-   - Built-in file watcher and `workspace/didChangeWatchedFiles` handler automatically detect newly created, modified, or deleted `.cs` files and update the Roslyn compilation in real-time.
+  - **Document Symbols (`textDocument/documentSymbol`)**: Hierarchical outline of C# namespaces/types/members, and GameObject/Component/PrefabInstance trees for `.prefab` and `.unity` files.
+  - **Workspace Symbols (`workspace/symbol`, `workspaceSymbol/resolve`)**: Project-wide symbol search by name with lazily resolved symbol details.
+  - **Call Hierarchy (`textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`)**: Explore callers and callees using Roslyn semantic analysis.
+  - **Will-Save Hooks (`textDocument/willSave`, `textDocument/willSaveWaitUntil`)**: Standard save lifecycle support.
+- **🗂 Multi-Root Workspaces**:
+  - Accepts multiple `workspaceFolders`; a `WorkspaceRouter` builds one Roslyn workspace per root and routes each document to the longest matching root prefix. Single-root (`rootUri` / `rootPath`) behaviour is unchanged.
+- **🧩 Workspace Commands & Configuration**:
+  - `workspace/executeCommand` supports `unitycsharp.reloadWorkspace` (rebuild workspaces & rescan AssetServer), `unitycsharp.showWorkspaceInfo` (summary), `unitycsharp.getSceneOrPrefabHierarchy` (GameObject/Component JSON tree), `unitycsharp.findSymbolUsagesInAssets`, and `unitycsharp.assetServerStatus`.
+  - `workspace/didChangeConfiguration` stores typed settings (`enableDiagnostics`, `predefinedSymbols`) and can disable diagnostic publication.
+  - Full file-operation events (`workspace/willCreateFiles` / `didCreateFiles`, `willRenameFiles` / `didRenameFiles`, `willDeleteFiles` / `didDeleteFiles`) keep the workspace in sync with editor file changes.
+  - Advertises `positionEncoding: utf-16` and work-done progress for long-running commands.
+- **👀 Dynamic File Monitoring**:
+  - Built-in file watchers automatically detect newly created, modified, or deleted `.cs`, `.meta`, `.prefab`, `.unity`, and `.asset` files in real-time.
 - **📦 Single-File Binary**:
   - Bundled with all Roslyn and JSON-RPC dependencies into a single, standalone executable.
+
+---
+
+## 🖥️ CLI Usage
+
+Run `UnityCSharpLSP.Server --help` for the full option list (LLM-friendly).
+
+```bash
+# LSP server over stdio (default; for editors/agents)
+UnityCSharpLSP.Server --stdio
+
+# Auto-generate OpenCode LSP config snippet with resolved binary path
+UnityCSharpLSP.Server --print-config
+
+# Persistent Unity asset data daemon (debug/manual)
+UnityCSharpLSP.Server --asset-daemon --project-root D:/MyUnityProject
+
+# Override Unity Editor location
+UnityCSharpLSP.Server --stdio --editor-path "C:/Program Files/Unity/Hub/Editor/2022.3.x/Editor"
+```
+
+Options: `--stdio`, `--editor-path <path>`, `--print-config`, `--asset-daemon`, `--project-root <path>`, `--daemon-idle-minutes <n>` (0/negative disables; default 30).
+
+Notes: stdout is reserved for LSP JSON-RPC (diagnostics go to stderr); multi-root workspaces supported; asset daemon auto-spawned by the LSP server when needed. Exit code 0 on success.
 
 ---
 
@@ -226,10 +257,14 @@ args = ["--stdio"]
 UnityCSharpLSP.Server [options]
 
 Options:
-  --stdio                      Use standard input/output for LSP JSON-RPC communication [default: True]
-  --editor-path <editor-path>  Explicit path to the Unity Editor installation (optional)
-  --version                    Show version information
-  -?, -h, --help               Show help and usage information
+  --stdio                        Use standard input/output for LSP JSON-RPC communication [default: True]
+  --editor-path <editor-path>    Explicit path to the Unity Editor installation (optional)
+  --print-config                 Print LLM agent LSP configuration snippet (opencode.json format) to stdout and exit
+  --asset-daemon                 Run as a persistent Unity asset data daemon over Named Pipe [default: False]
+  --project-root <project-root>  Unity project root directory for --asset-daemon (defaults to current directory)
+  --daemon-idle-minutes <int>    Idle shutdown timeout in minutes for --asset-daemon (<= 0 disables) [default: 30]
+  --version                      Show version information
+  -?, -h, --help                 Show help and usage information
 ```
 
 > **Note**: `--editor-path` is optional. UnityCSharpLSP automatically detects the installed Unity Editor version by inspecting `ProjectSettings/ProjectVersion.txt` and querying Unity Hub's registered editors list.
@@ -255,7 +290,6 @@ This project is licensed under the [MIT License](LICENSE).
 ## 📖 Feature & Operation Reference
 
 A complete list of the features and operations currently supported by UnityCSharpLSP.
-Last updated: v0.3.1
 
 ### 1. Startup & CLI Operations
 
@@ -265,6 +299,9 @@ Last updated: v0.3.1
 | `--stdio` | Communicates via JSON-RPC over standard input/output |
 | `--editor-path <path>` | Explicitly specifies the Unity Editor installation (auto-detected when omitted) |
 | `--print-config` | Prints an `opencode.json` configuration snippet for OpenCode and exits |
+| `--asset-daemon` | Starts as a per-project persistent Unity Asset Data Daemon over Named Pipe |
+| `--project-root <path>` | Target Unity project root for `--asset-daemon` (defaults to current working directory) |
+| `--daemon-idle-minutes <int>` | Idle shutdown timeout in minutes for `--asset-daemon` (`30` by default, `<= 0` disables) |
 | `--help` | Shows help |
 
 #### Configuration Example (OpenCode)
@@ -274,7 +311,7 @@ Last updated: v0.3.1
   "lsp": {
     "unity-csharp-2nek": {
       "command": ["<path/to/UnityCSharpLSP.Server.exe>", "--stdio"],
-      "extensions": [".cs"]
+      "extensions": [".cs", ".prefab", ".unity", ".asset"]
     }
   }
 }
@@ -306,20 +343,20 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 
 | Method | Description | Implementation |
 | :--- | :--- | :--- |
-| `textDocument/hover` | Shows the symbol signature and XML `<summary>` as Markdown (follows the client's supported formats) | `HoverHandler.cs` |
-| `textDocument/definition` | Jumps to the declaration (reference resolution across `.asmdef` boundaries) | `DefinitionHandler.cs` |
+| `textDocument/hover` | Shows the symbol signature and XML `<summary>` as Markdown; on `.prefab` / `.unity` / `.asset`, enriches asset/field hover with C# signature, XML docs, and `[Tooltip]` | `HoverHandler.cs` |
+| `textDocument/definition` | Jumps to declarations across `.asmdef` boundaries; navigates YAML `guid:`/field lines to target assets/C# fields; jumps from `SceneManager.LoadScene` / `LoadSceneAsync` strings to `.unity` files | `DefinitionHandler.cs` |
 | `textDocument/typeDefinition` | Jumps to the type declaration of the symbol at the cursor | `TypeDefinitionHandler.cs` |
 | `textDocument/declaration` | Jumps to the symbol declaration (including `OriginalDefinition`) | `DeclarationHandler.cs` |
-| `textDocument/references` | Solution-wide reference search | `ReferencesHandler.cs` |
-| `textDocument/completion` | Member completion, scope completion, and MonoBehaviour message snippet completion | `CompletionHandler.cs` |
+| `textDocument/references` | Solution-wide C# reference search plus direct & transitive `.prefab` / `.unity` / `.asset` usages (`m_Script`, `m_SourcePrefab`, serialized fields, overrides, `UnityEvent`) | `ReferencesHandler.cs` |
+| `textDocument/completion` | Member completion, scope completion, MonoBehaviour message snippet completion, and enabled build-scene completion inside `SceneManager.LoadScene("` / `LoadSceneAsync("` | `CompletionHandler.cs` |
 | `completionItem/resolve` | Lazily resolves completion item `Detail` and XML documentation | `CompletionHandler.cs` |
-| `textDocument/documentSymbol` | Hierarchical outline of namespaces, types, and members. Flattened to `SymbolInformation[]` when the client lacks hierarchy support | `DocumentSymbolHandler.cs` |
+| `textDocument/documentSymbol` | Hierarchical outline of C# namespaces, types, and members, or GameObject/Component/PrefabInstance hierarchy tree for `.prefab` / `.unity` files | `DocumentSymbolHandler.cs` |
 | `textDocument/documentHighlight` | Highlights declarations and references within the same file | `DocumentHighlightHandler.cs` |
 | `textDocument/implementation` | Jumps to implementations of interfaces and abstract/virtual members | `ImplementationHandler.cs` |
 | `textDocument/foldingRange` | Folding for namespaces, types, members, blocks, `#region` / `#if`, consecutive usings, and multi-line comments | `FoldingRangeHandler.cs` |
 | `textDocument/selectionRange` | Returns the syntax-node hierarchy at the cursor as selection ranges | `SelectionRangeHandler.cs` |
 | `textDocument/signatureHelp` | Argument signatures and XML documentation for calls, object creation, and attributes | `SignatureHelpHandler.cs` |
-| `textDocument/rename` | Solution-wide rename via `Renamer` with a minimal `WorkspaceEdit` | `RenameHandler.cs` |
+| `textDocument/rename` | Solution-wide rename via `Renamer`, plus YAML key, `propertyPath`, and `UnityEvent` `m_MethodName` edit propagation across `.prefab` / `.unity` / `.asset` | `RenameHandler.cs` |
 | `textDocument/prepareRename` | Range and placeholder for renameable tokens | `RenameHandler.cs` |
 | `textDocument/prepareCallHierarchy` | Retrieves the callable symbol at the cursor | `CallHierarchyHandler.cs` |
 | `callHierarchy/incomingCalls` | List of callers | `CallHierarchyHandler.cs` |
@@ -331,17 +368,17 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 | `textDocument/formatting` | Formats the entire document with the Roslyn `Formatter` (honors `FormattingOptions` tab width and spaces, returns a minimal `TextEdit[]`) | `FormattingHandler.cs` |
 | `textDocument/rangeFormatting` | Formats only the specified range | `FormattingHandler.cs` |
 | `textDocument/onTypeFormatting` | Formats the current line when `}`, `;`, or a newline is typed | `FormattingHandler.cs` |
-| `textDocument/codeAction` | Adds `using` or fully qualified names for `CS0246` / `CS0103`, and suppresses any diagnostic with `#pragma warning disable` | `CodeActionHandler.cs` |
+| `textDocument/codeAction` | Adds `using` or fully qualified names for `CS0246` / `CS0103`, suppresses diagnostics with `#pragma warning disable`, and offers `Add [FormerlySerializedAs("<fieldName>")]` on Unity fields | `CodeActionHandler.cs` |
 | `codeAction/resolve` | Lazily resolves quick fixes (edits are pre-configured and returned as-is) | `CodeActionHandler.cs` |
 | `textDocument/semanticTokens/full` | Encodes Roslyn classification results into LSP token format (whole document) | `SemanticTokensHandler.cs` |
 | `textDocument/semanticTokens/range` | Semantic tokens for the specified range | `SemanticTokensHandler.cs` |
 | `textDocument/inlayHint` | Inferred type hints for `var` (`: <type>`) and parameter-name hints for arguments (LSP 3.17) | `InlayHintHandler.cs` |
-| `textDocument/codeLens` | Reference-count lenses for types and methods (`N references`) | `CodeLensHandler.cs` |
+| `textDocument/codeLens` | Reference-count lenses (`N references` or `N references (P prefabs, S scenes)` for `MonoBehaviour` / `ScriptableObject`) | `CodeLensHandler.cs` |
 | `codeLens/resolve` | Resolves code lenses (the display command is pre-configured) | `CodeLensHandler.cs` |
-| `textDocument/documentLink` | Links file paths found in comments and string literals | `DocumentLinkHandler.cs` |
+| `textDocument/documentLink` | Links file paths in comments/strings, `SceneManager.LoadScene` / `LoadSceneAsync` scene names, and `guid:` asset references in `.prefab` / `.unity` / `.asset` | `DocumentLinkHandler.cs` |
 | `textDocument/linkedEditingRange` | Linked editing of `#if` / `#elif` / `#define` / `#undef` symbols and `#region` / `#endregion` labels | `LinkedEditingRangeHandler.cs` |
 | `textDocument/inlineValue` | Inline display of `= <value>` for constant-evaluable locals and fields (LSP 3.17) | `InlineValueHandler.cs` |
-| `textDocument/diagnostic` | Pull diagnostics. Returns `unchanged` when `resultId` matches, otherwise `full` (push diagnostics continue as well) | `PullDiagnosticsHandler.cs` |
+| `textDocument/diagnostic` | Pull diagnostics for C# and `.prefab` / `.unity` / `.asset` (`UNITY0001` Missing Script). Returns `unchanged` when `resultId` matches, otherwise `full` | `PullDiagnosticsHandler.cs` |
 | `workspaceSymbol/resolve` | Lazily fills `containerName` / `detail` / `kind` from the `data` of symbols returned by `workspace/symbol` (custom method) | `WorkspaceSymbolHandler.cs` |
 
 #### Client Capability Negotiation
@@ -361,6 +398,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 #### Completion Triggers
 
 - `.` (member access)
+- `"` (build scene completion inside `SceneManager.LoadScene("` / `LoadSceneAsync("`)
 - Inside classes deriving from MonoBehaviour, snippet completion of Unity messages such as `Update` / `Start` / `Awake` / `OnCollisionEnter`
 
 #### On-Type Formatting Triggers
@@ -374,7 +412,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 | `workspace/symbol` | request | Symbol search across all workspace folders and assemblies (no result limit, supports partial results). Uses the LSP 3.17 `WorkspaceSymbol[]` form with `data` / `tags` / `detail` |
 | `workspace/diagnostic` | request | Pull-style workspace diagnostics. Returns reports for all documents with `resultId`, and returns `unchanged` when `previousResultIds` match (also supports partial result tokens) |
 | `workspaceSymbol/resolve` | request | Fills in detailed information from a symbol's `data` (custom method) |
-| `workspace/executeCommand` | request | `unitycsharp.reloadWorkspace` (rebuild the workspace) and `unitycsharp.showWorkspaceInfo` (returns a summary and also notifies via `window/showMessage`) |
+| `workspace/executeCommand` | request | Executes `unitycsharp.reloadWorkspace`, `unitycsharp.showWorkspaceInfo`, `unitycsharp.getSceneOrPrefabHierarchy`, `unitycsharp.findSymbolUsagesInAssets`, and `unitycsharp.assetServerStatus` |
 | `workspace/didChangeConfiguration` | notification | Stores settings as a typed object. `enableDiagnostics` toggles push diagnostics on/off, and `predefinedSymbols` is also retained |
 | `workspace/didChangeWatchedFiles` | notification | Detects creation, modification, and deletion of `.cs` files and reflects them in the Roslyn compilation |
 | `workspace/willRenameFiles` | request | Renames types matching the old file name to the new file name via the Roslyn `Renamer`, returning solution-wide `TextEdit[]` in `WorkspaceEdit.Changes` |
@@ -392,7 +430,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 
 | Method | Description |
 | :--- | :--- |
-| `textDocument/publishDiagnostics` | Publishes Roslyn compiler diagnostics with the target document's `version`. `CS0649` for `[SerializeField]` is suppressed |
+| `textDocument/publishDiagnostics` | Publishes Roslyn compiler diagnostics and `.prefab` / `.unity` / `.asset` Missing Script warnings (`UNITY0001`). `CS0649` for `[SerializeField]` and `IDE0051` for `UnityEvent`-referenced methods are suppressed |
 | `$/progress` | Notifies `workspace/symbol` partial results in batches of 100 as `SymbolInformation[]`. Also supports work-done progress for long-running commands (when `workDoneToken` is specified) |
 | `window/showMessage` | Notifies the result of `unitycsharp.showWorkspaceInfo` as an information message |
 
@@ -405,9 +443,10 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 | `.asmdef` graph | Parses GUID references, `versionDefines`, `defineConstraints`, and `includePlatforms` to build Roslyn project references |
 | UPM package resolution | Parses `Packages/manifest.json`, `packages-lock.json`, and `Library/PackageCache` |
 | Preprocessor symbols | Automatically defines symbols according to the Unity version, platform, and packages |
-| Diagnostic suppressor | Suppresses false-positive `CS0649` warnings on `[SerializeField]` fields |
+| Diagnostic suppressors | Suppresses false-positive `CS0649` warnings on `[SerializeField]` fields and `IDE0051` warnings on `UnityEvent`-referenced methods |
 | MonoBehaviour completion | Snippet completion for Unity message methods |
-| Dynamic file monitoring | Reflects new and deleted `.cs` files immediately even without opening the Unity Editor |
+| Prefab / Scene Asset Daemon | `--asset-daemon` + SQLite WAL+mmap (`Library/UnityCSharpLSP/asset-db.sqlite`) + in-memory graph providing cross-asset references, CodeLens, Rename propagation, YAML navigation/symbols, `UNITY0001` diagnostics, and `SceneManager.LoadScene` completion/navigation |
+| Dynamic file monitoring | Reflects new, modified, and deleted `.cs`, `.meta`, `.prefab`, `.unity`, and `.asset` files immediately without opening the Unity Editor |
 | No `.csproj` / `.sln` required | Builds the Roslyn workspace directly without relying on project files generated by Unity |
 | Nullable | Disabled to match Unity's default (`NullableContextOptions.Disable`) |
 | Multi-root workspace | Manages multiple `workspaceFolders` simultaneously as separate Roslyn workspaces |

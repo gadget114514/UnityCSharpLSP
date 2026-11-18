@@ -1,5 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
+using UnityCSharpLSP.AssetServer.Contracts;
 using LspLocation = Microsoft.VisualStudio.LanguageServer.Protocol.Location;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 using LspPosition = Microsoft.VisualStudio.LanguageServer.Protocol.Position;
@@ -53,6 +54,40 @@ internal static class LspSymbolMapper
             Uri = new Uri(Path.GetFullPath(location.SourceTree.FilePath)),
             Range = ToRange(location),
         };
+    }
+
+    public static LspLocation? ToLocation(AssetReferenceLocationDto? location)
+    {
+        if (location is null || string.IsNullOrWhiteSpace(location.FullPath))
+        {
+            return null;
+        }
+
+        var fullPath = Path.GetFullPath(location.FullPath);
+        var endCharacter = Math.Max(location.Character, location.EndCharacter);
+        return new LspLocation
+        {
+            Uri = new Uri(fullPath),
+            Range = new LspRange
+            {
+                Start = new LspPosition(location.Line, location.Character),
+                End = new LspPosition(location.Line, endCharacter),
+            },
+        };
+    }
+
+    public static void AddUniqueLocation(List<LspLocation> target, HashSet<string> seen, LspLocation? location)
+    {
+        if (location is null)
+        {
+            return;
+        }
+
+        var key = $"{location.Uri.LocalPath}:{location.Range.Start.Line}:{location.Range.Start.Character}";
+        if (seen.Add(key))
+        {
+            target.Add(location);
+        }
     }
 
     public static LspSymbolKind ToSymbolKind(ISymbol symbol)

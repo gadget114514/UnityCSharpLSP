@@ -3,6 +3,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.AssetServer.Contracts;
 using UnityCSharpLSP.Workspace;
 using LspLocation = Microsoft.VisualStudio.LanguageServer.Protocol.Location;
 
@@ -43,7 +44,8 @@ public sealed class CodeLensHandler
             return null;
         }
 
-        var lenses = new List<CodeLens>();
+        var candidates = new List<(SyntaxToken Identifier, ISymbol Symbol, string? ScriptGuid)>();
+        var scriptGuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var node in root.DescendantNodes())
         {
@@ -71,6 +73,39 @@ public sealed class CodeLensHandler
                 continue;
             }
 
+            string? scriptGuid = null;
+            if (node is BaseTypeDeclarationSyntax &&
+                symbol is INamedTypeSymbol namedType &&
+                UnitySymbolGuidHelper.IsUnityObjectType(namedType) &&
+                UnitySymbolGuidHelper.TryGetScriptGuid(namedType, out var resolvedGuid))
+            {
+                scriptGuid = resolvedGuid;
+                scriptGuids.Add(resolvedGuid);
+            }
+
+            candidates.Add((identifier, symbol, scriptGuid));
+        }
+
+        Dictionary<string, ScriptReferenceCountDto>? assetCountsByGuid = null;
+        if (scriptGuids.Count > 0)
+        {
+            var counts = await ws.AssetService
+                .GetScriptReferenceCountsAsync(scriptGuids.ToArray(), ct)
+                .ConfigureAwait(false);
+            assetCountsByGuid = new Dictionary<string, ScriptReferenceCountDto>(StringComparer.OrdinalIgnoreCase);
+            foreach (var count in counts)
+            {
+                if (!string.IsNullOrEmpty(count.ScriptGuid))
+                {
+                    assetCountsByGuid[count.ScriptGuid] = count;
+                }
+            }
+        }
+
+        var lenses = new List<CodeLens>(candidates.Count);
+
+        foreach (var (identifier, symbol, scriptGuid) in candidates)
+        {
             IReadOnlyList<ReferencedSymbol> references;
             try
             {
@@ -83,16 +118,42 @@ public sealed class CodeLensHandler
             }
 
             var locations = new List<LspLocation>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var reference in references)
             {
                 foreach (var location in reference.Locations)
                 {
-                    var lspLocation = LspSymbolMapper.ToLocation(location.Location);
-                    if (lspLocation is not null)
-                    {
-                        locations.Add(lspLocation);
-                    }
+                    LspSymbolMapper.AddUniqueLocation(locations, seen, LspSymbolMapper.ToLocation(location.Location));
                 }
+            }
+
+            string title;
+            if (scriptGuid is not null &&
+                assetCountsByGuid is not null &&
+                assetCountsByGuid.TryGetValue(scriptGuid, out var assetCount) &&
+                assetCount.TotalAssetCount > 0)
+            {
+                var assetRefs = await ws.AssetService.FindReferencesAsync(
+                    new AssetReferenceQueryDto
+                    {
+                        ScriptGuid = scriptGuid,
+                        MemberKind = AssetMemberKind.Class,
+                        IncludeTransitiveScenes = true,
+                    },
+                    ct).ConfigureAwait(false);
+
+                foreach (var assetLoc in assetRefs.Locations)
+                {
+                    LspSymbolMapper.AddUniqueLocation(locations, seen, LspSymbolMapper.ToLocation(assetLoc));
+                }
+
+                var prefabCount = assetCount.DirectPrefabCount + assetCount.TransitivePrefabCount;
+                var sceneCount = assetCount.SceneCount;
+                title = $"{locations.Count} references ({prefabCount} prefabs, {sceneCount} scenes)";
+            }
+            else
+            {
+                title = $"{locations.Count} references";
             }
 
             var linePosition = text.Lines.GetLinePosition(identifier.SpanStart);
@@ -101,7 +162,7 @@ public sealed class CodeLensHandler
                 Range = LspTextMapper.ToRange(text, identifier.Span),
                 Command = new Command
                 {
-                    Title = $"{locations.Count} references",
+                    Title = title,
                     CommandIdentifier = "editor.action.showReferences",
                     Arguments =
                     [

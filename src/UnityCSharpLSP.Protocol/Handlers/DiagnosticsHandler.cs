@@ -2,7 +2,9 @@ using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Semantics.Analyzers;
+using UnityCSharpLSP.Workspace;
 using RoslynDiagnostic = Microsoft.CodeAnalysis.Diagnostic;
+using RoslynSemanticModel = Microsoft.CodeAnalysis.SemanticModel;
 using RoslynSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
 
 namespace UnityCSharpLSP.Protocol.Handlers;
@@ -51,20 +53,47 @@ public sealed class DiagnosticsHandler
         }
 
         var doc = ws.GetDocument(filePath);
+        if (doc is null && UnityAssetFileHelper.IsYamlAssetFile(filePath))
+        {
+            return await GetYamlAssetDiagnosticsAsync(ws, filePath, ct).ConfigureAwait(false);
+        }
+
         var semanticModel = doc is not null ? await doc.GetSemanticModelAsync(ct).ConfigureAwait(false) : null;
         var diagnostics = await ws.GetDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
 
-        // Apply Unity-specific diagnostic suppressors (e.g. CS0649 for [SerializeField])
-        var filteredDiagnostics = diagnostics.Where(d =>
-        {
-            if (semanticModel is not null && SerializeFieldSuppressor.ShouldSuppress(d, semanticModel))
-            {
-                return false;
-            }
-            return true;
-        });
+        var filteredDiagnostics = await FilterDiagnosticsAsync(
+            ws,
+            semanticModel,
+            diagnostics,
+            ct).ConfigureAwait(false);
 
         return ConvertDiagnostics(filteredDiagnostics);
+    }
+
+    /// <summary>
+    /// Filters Roslyn diagnostics by applying Unity-specific suppressors such as
+    /// <c>CS0649</c> for <c>[SerializeField]</c> and <c>IDE0051</c> for <c>UnityEvent</c>-referenced methods.
+    /// </summary>
+    public static async Task<IReadOnlyList<RoslynDiagnostic>> FilterDiagnosticsAsync(
+        UnityWorkspaceManager ws,
+        RoslynSemanticModel? semanticModel,
+        IEnumerable<RoslynDiagnostic> diagnostics,
+        CancellationToken ct = default)
+    {
+        var filtered = new List<RoslynDiagnostic>();
+        foreach (var diagnostic in diagnostics)
+        {
+            if (semanticModel is not null &&
+                await SerializeFieldSuppressor.ShouldSuppressAsync(diagnostic, semanticModel, ws.AssetService, ct)
+                    .ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            filtered.Add(diagnostic);
+        }
+
+        return filtered;
     }
 
     public async Task ClearDiagnosticsAsync(Uri uri)
@@ -82,6 +111,31 @@ public sealed class DiagnosticsHandler
                 Diagnostics = diagnostics,
                 Version = version,
             }).ConfigureAwait(false);
+    }
+
+    private static async Task<Diagnostic[]> GetYamlAssetDiagnosticsAsync(
+        UnityWorkspaceManager ws,
+        string filePath,
+        CancellationToken ct)
+    {
+        var assetDiagnostics = await ws.AssetService.GetAssetDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
+        if (assetDiagnostics.Length == 0)
+        {
+            return Array.Empty<Diagnostic>();
+        }
+
+        return assetDiagnostics.Select(d => new Diagnostic
+        {
+            Range = new Microsoft.VisualStudio.LanguageServer.Protocol.Range
+            {
+                Start = new Position(Math.Max(0, d.Line), Math.Max(0, d.StartCharacter)),
+                End = new Position(Math.Max(0, d.Line), Math.Max(0, d.EndCharacter)),
+            },
+            Severity = DiagnosticSeverity.Warning,
+            Code = d.Code,
+            Source = "UnityCSharpLSP",
+            Message = d.Message,
+        }).ToArray();
     }
 
     public static Diagnostic[] ConvertDiagnostics(IEnumerable<RoslynDiagnostic> diagnostics)

@@ -1,6 +1,8 @@
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.AssetServer.Contracts;
 using UnityCSharpLSP.Workspace;
 using LspLocation = Microsoft.VisualStudio.LanguageServer.Protocol.Location;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
@@ -101,6 +103,53 @@ public sealed class ReferencesHandler
             }
         }
 
+        // Add Unity asset (Prefab / Scene) references when applicable
+        var assetQuery = CreateAssetReferenceQuery(symbol);
+        if (assetQuery is not null)
+        {
+            var assetRefs = await ws.AssetService.FindReferencesAsync(assetQuery, ct).ConfigureAwait(false);
+            foreach (var loc in assetRefs.Locations)
+            {
+                LspSymbolMapper.AddUniqueLocation(results, seen, LspSymbolMapper.ToLocation(loc));
+            }
+        }
+
         return results.Count > 0 ? results.ToArray() : null;
+    }
+
+    private static AssetReferenceQueryDto? CreateAssetReferenceQuery(ISymbol symbol)
+    {
+        if (!UnitySymbolGuidHelper.TryGetScriptGuid(symbol, out var scriptGuid))
+        {
+            return null;
+        }
+
+        return symbol switch
+        {
+            INamedTypeSymbol namedType when UnitySymbolGuidHelper.IsUnityObjectType(namedType) =>
+                new AssetReferenceQueryDto
+                {
+                    ScriptGuid = scriptGuid,
+                    MemberKind = AssetMemberKind.Class,
+                    IncludeTransitiveScenes = true,
+                },
+            IFieldSymbol field when UnitySymbolGuidHelper.IsUnityObjectType(field.ContainingType) &&
+                                    UnitySymbolGuidHelper.IsSerializableField(field) =>
+                new AssetReferenceQueryDto
+                {
+                    ScriptGuid = scriptGuid,
+                    MemberKind = AssetMemberKind.Field,
+                    MemberName = field.Name,
+                },
+            IMethodSymbol method when method.MethodKind == MethodKind.Ordinary &&
+                                      UnitySymbolGuidHelper.IsUnityObjectType(method.ContainingType) =>
+                new AssetReferenceQueryDto
+                {
+                    ScriptGuid = scriptGuid,
+                    MemberKind = AssetMemberKind.Method,
+                    MemberName = method.Name,
+                },
+            _ => null,
+        };
     }
 }

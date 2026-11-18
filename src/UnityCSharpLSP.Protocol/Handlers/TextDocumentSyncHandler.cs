@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.Workspace;
 
 namespace UnityCSharpLSP.Protocol.Handlers;
 
@@ -29,9 +30,12 @@ public sealed class TextDocumentSyncHandler
         if (ws is null) return;
 
         var filePath = @params.TextDocument.Uri.LocalPath;
-        var text = @params.TextDocument.Text;
+        if (!UnityAssetFileHelper.IsYamlAssetFile(filePath))
+        {
+            var text = @params.TextDocument.Text;
+            ws.OpenOrUpdateDocument(filePath, text, @params.TextDocument.Version);
+        }
 
-        ws.OpenOrUpdateDocument(filePath, text, @params.TextDocument.Version);
         await PublishAsync(@params.TextDocument.Uri, filePath).ConfigureAwait(false);
     }
 
@@ -98,6 +102,12 @@ public sealed class TextDocumentSyncHandler
         if (ws is null) return;
 
         var filePath = @params.TextDocument.Uri.LocalPath;
+        if (UnityAssetFileHelper.IsYamlAssetFile(filePath))
+        {
+            await PublishAsync(@params.TextDocument.Uri, filePath).ConfigureAwait(false);
+            return;
+        }
+
         string text;
         if (@params.Text is not null)
         {

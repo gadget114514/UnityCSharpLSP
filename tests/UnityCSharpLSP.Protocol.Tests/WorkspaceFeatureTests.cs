@@ -27,6 +27,9 @@ public sealed class WorkspaceFeatureTests
             Assert.NotNull(commands);
             Assert.Contains(ExecuteCommandHandler.ReloadWorkspaceCommand, commands!);
             Assert.Contains(ExecuteCommandHandler.ShowWorkspaceInfoCommand, commands!);
+            Assert.Contains(ExecuteCommandHandler.GetSceneOrPrefabHierarchyCommand, commands!);
+            Assert.Contains(ExecuteCommandHandler.FindSymbolUsagesInAssetsCommand, commands!);
+            Assert.Contains(ExecuteCommandHandler.AssetServerStatusCommand, commands!);
 
             Assert.True((bool?)capabilities["textDocumentSync"]?["willSave"]);
             Assert.True((bool?)capabilities["textDocumentSync"]?["willSaveWaitUntil"]);
