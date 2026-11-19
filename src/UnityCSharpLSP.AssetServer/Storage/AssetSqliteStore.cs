@@ -34,6 +34,19 @@ public readonly record struct MissingScriptAttachment(
     int LineNumber);
 
 /// <summary>
+/// A <c>PrefabInstance.m_Modifications</c> override row joined with the asset that contains it.
+/// </summary>
+public readonly record struct PrefabOverrideModification(
+    int AssetId,
+    long PrefabInstanceFileId,
+    AssetGuid TargetGuid,
+    long TargetFileId,
+    string RootFieldName,
+    string PropertyPath,
+    int LineNumber,
+    string OwningAssetRelativePath);
+
+/// <summary>
 /// Single-writer SQLite storage engine (<c>WAL + mmap</c>) for Unity asset metadata,
 /// script attachments, prefab instances, property modifications, serialized fields, and UnityEvent calls.
 /// </summary>
@@ -627,6 +640,81 @@ public sealed class AssetSqliteStore : IDisposable
             Locations = locations.ToArray(),
             Truncated = truncated,
         };
+    }
+
+    /// <summary>
+    /// Reverse-lookups every <c>prefab_modifications</c> row targeting the object identified by
+    /// <paramref name="targetGuid"/> + <paramref name="targetFileId"/>, joined with the asset that stores the override.
+    /// </summary>
+    public PrefabOverrideModification[] GetPrefabModificationsByTarget(AssetGuid targetGuid, long targetFileId)
+    {
+        ThrowIfDisposed();
+        if (targetGuid.IsZero)
+        {
+            return Array.Empty<PrefabOverrideModification>();
+        }
+
+        using SqliteConnection connection = OpenConnection();
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT pm.asset_id, pm.prefab_instance_fid, pm.target_guid, pm.target_fid,
+                   pm.root_field_name, pm.property_path, pm.line_number, a.rel_path
+            FROM prefab_modifications pm
+            JOIN assets a ON a.asset_id = pm.asset_id
+            WHERE pm.target_guid = $targetGuid AND pm.target_fid = $targetFid
+            ORDER BY a.rel_path, pm.line_number;
+            """;
+        cmd.Parameters.AddWithValue("$targetGuid", targetGuid.ToByteArray());
+        cmd.Parameters.AddWithValue("$targetFid", targetFileId);
+
+        return ReadPrefabOverrideModifications(cmd);
+    }
+
+    /// <summary>
+    /// Returns all <c>m_Modifications</c> override rows stored inside the asset identified by <paramref name="assetId"/>.
+    /// </summary>
+    public PrefabOverrideModification[] GetPrefabModificationsForAsset(int assetId)
+    {
+        ThrowIfDisposed();
+        if (assetId <= 0)
+        {
+            return Array.Empty<PrefabOverrideModification>();
+        }
+
+        using SqliteConnection connection = OpenConnection();
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT pm.asset_id, pm.prefab_instance_fid, pm.target_guid, pm.target_fid,
+                   pm.root_field_name, pm.property_path, pm.line_number, a.rel_path
+            FROM prefab_modifications pm
+            JOIN assets a ON a.asset_id = pm.asset_id
+            WHERE pm.asset_id = $assetId
+            ORDER BY pm.line_number;
+            """;
+        cmd.Parameters.AddWithValue("$assetId", assetId);
+
+        return ReadPrefabOverrideModifications(cmd);
+    }
+
+    private static PrefabOverrideModification[] ReadPrefabOverrideModifications(SqliteCommand cmd)
+    {
+        var results = new List<PrefabOverrideModification>();
+        byte[] guidBuffer = new byte[16];
+        using SqliteDataReader reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            results.Add(new PrefabOverrideModification(
+                reader.GetInt32(0),
+                reader.GetInt64(1),
+                ReadGuid(reader, 2, guidBuffer),
+                reader.GetInt64(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetInt32(6),
+                reader.GetString(7)));
+        }
+
+        return results.ToArray();
     }
 
     /// <summary>

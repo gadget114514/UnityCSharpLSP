@@ -141,12 +141,22 @@ public sealed class AssetDaemonIpcTests
         AssetHierarchyNodeDto[] hierarchy = await client.GetHierarchyAsync("Assets/Prefabs/Player.prefab", maxDepth: 8, includeSerializedValues: false, hostCts.Token);
         Assert.Single(hierarchy);
 
+        AssetHierarchyNodeDto[] sceneHierarchy = await client.GetHierarchyAsync("Assets/Scenes/MainScene.unity", maxDepth: 8, includeSerializedValues: false, hostCts.Token);
+        Assert.Equal(2, sceneHierarchy.Length);
+        Assert.Equal("GameManager", sceneHierarchy[0].Name);
+        Assert.Equal("Player", sceneHierarchy[1].Name);
+        Assert.True(sceneHierarchy[1].IsPrefabInstance);
+        Assert.Equal(PlayerPrefabGuid, sceneHierarchy[1].SourcePrefabGuid);
+        Assert.Contains(sceneHierarchy[0].Components, c => c.TypeName == "Transform");
+
         BuildSceneDto[] scenes = await client.GetBuildScenesAsync(hostCts.Token);
         BuildSceneDto mainScene = Assert.Single(scenes);
         Assert.Equal(MainSceneGuid, mainScene.Guid);
 
         AssetDiagnosticDto[] diagnostics = await client.GetAssetDiagnosticsAsync("Assets/Prefabs/Player.prefab", hostCts.Token);
-        Assert.Empty(diagnostics);
+        AssetDiagnosticDto dangling = Assert.Single(diagnostics);
+        Assert.Equal("UNITY0002", dangling.Code);
+        Assert.Contains("a1b2c3d4e5f60718293a4b5c6d7e8f90", dangling.Message);
 
         bool eventUsed = await client.IsMethodReferencedByUnityEventAsync(PlayerControllerGuid, "ApplyDamage", hostCts.Token);
         Assert.True(eventUsed);

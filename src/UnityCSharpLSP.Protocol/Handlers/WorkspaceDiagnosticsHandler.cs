@@ -64,7 +64,14 @@ public sealed class WorkspaceDiagnosticsHandler
 
                     var text = await document.GetTextAsync(ct).ConfigureAwait(false);
                     var version = ws.GetDocumentVersion(filePath);
-                    var resultId = PullDiagnosticsHandler.ComputeResultId(filePath, version, text.ToString());
+                    var diagnosticsHandler = _diagnosticsHandlerProvider();
+                    var diagnostics = diagnosticsHandler is not null
+                        ? await diagnosticsHandler.GetLspDiagnosticsAsync(filePath, ct).ConfigureAwait(false)
+                        : Array.Empty<Microsoft.VisualStudio.LanguageServer.Protocol.Diagnostic>();
+                    var resultId = PullDiagnosticsHandler.ComputeResultId(
+                        filePath,
+                        version,
+                        $"{text}\n{PullDiagnosticsHandler.ComputeUnityDiagnosticKey(diagnostics)}");
 
                     if (previous.TryGetValue(uri, out var previousResultId) &&
                         string.Equals(previousResultId, resultId, StringComparison.Ordinal))
@@ -78,11 +85,6 @@ public sealed class WorkspaceDiagnosticsHandler
                         });
                         continue;
                     }
-
-                    var diagnosticsHandler = _diagnosticsHandlerProvider();
-                    var diagnostics = diagnosticsHandler is not null
-                        ? await diagnosticsHandler.GetLspDiagnosticsAsync(filePath, ct).ConfigureAwait(false)
-                        : Array.Empty<Microsoft.VisualStudio.LanguageServer.Protocol.Diagnostic>();
 
                     items.Add(new WorkspaceDocumentDiagnosticReport
                     {

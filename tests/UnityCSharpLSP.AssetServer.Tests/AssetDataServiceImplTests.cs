@@ -416,6 +416,123 @@ public sealed class AssetDataServiceImplTests
     }
 
     [Fact]
+    public async Task GetAssetsAsync_FiltersByKindAndReturnsGuidsForCompletion()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = GetDummyProjectRoot();
+        using var service = new AssetDataServiceImpl(projectRoot, Path.Combine(tempDir.Path, "db.sqlite"), enableFileWatcher: false);
+        await service.InitializeAndSyncAsync();
+
+        AssetEntryDto[] scripts = await service.GetAssetsAsync(AssetKind.CSharpScript);
+        Assert.NotEmpty(scripts);
+        Assert.All(scripts, a => Assert.Equal(AssetKind.CSharpScript, a.Kind));
+        Assert.Contains(scripts, a => a.Guid == PlayerControllerGuid && a.RelativePath == "Assets/Scripts/PlayerController.cs");
+
+        AssetEntryDto[] prefabs = await service.GetAssetsAsync(AssetKind.Prefab);
+        AssetEntryDto prefab = Assert.Single(prefabs);
+        Assert.Equal(PlayerPrefabGuid, prefab.Guid);
+
+        AssetEntryDto[] all = await service.GetAssetsAsync(null);
+        Assert.True(all.Length > scripts.Length + prefabs.Length);
+    }
+
+    [Fact]
+    public async Task GetAssetDiagnosticsAsync_UnresolvedGuids_ReportsUnity0002WithoutDuplicatingUnity0001()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = Path.Combine(tempDir.Path, "DanglingDiagProj");
+        const string validScriptGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string deletedPrefabGuid = "cccccccccccccccccccccccccccccccc";
+        const string deletedAssetGuid = "dddddddddddddddddddddddddddddddd";
+
+        WriteAssetWithMeta(projectRoot, "Assets/Scripts/ValidScript.cs", validScriptGuid, "public class ValidScript {}");
+        string scenePath = WriteAssetWithMeta(
+            projectRoot,
+            "Assets/Scenes/Broken.unity",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            string.Join("\n",
+            [
+                "%YAML 1.1",
+                "%TAG !u! tag:unity3d.com,2011:",
+                "--- !u!1001 &100100",
+                "PrefabInstance:",
+                $"  m_SourcePrefab: {{fileID: 100100000, guid: {deletedPrefabGuid}, type: 3}}",
+                "--- !u!114 &100014",
+                "MonoBehaviour:",
+                $"  m_Script: {{fileID: 11500000, guid: {validScriptGuid}, type: 3}}",
+                $"  icon: {{fileID: 2800000, guid: {deletedAssetGuid}, type: 3}}",
+            ]));
+
+        using AssetDataServiceImpl service = await CreateInitializedServiceAsync(projectRoot, Path.Combine(tempDir.Path, "db.sqlite"));
+
+        AssetDiagnosticDto[] diags = await service.GetAssetDiagnosticsAsync(scenePath);
+        Assert.Equal(2, diags.Length);
+        Assert.All(diags, d => Assert.Equal("UNITY0002", d.Code));
+
+        AssetDiagnosticDto prefabDiag = Assert.Single(diags, d => d.Message.Contains("Missing prefab reference"));
+        Assert.Equal(4, prefabDiag.Line);
+        Assert.Contains(deletedPrefabGuid, prefabDiag.Message);
+        Assert.Contains("m_SourcePrefab", prefabDiag.Message);
+
+        AssetDiagnosticDto assetDiag = Assert.Single(diags, d => d.Message.Contains("Dangling asset reference"));
+        Assert.Equal(8, assetDiag.Line);
+        Assert.Contains(deletedAssetGuid, assetDiag.Message);
+        Assert.Contains("icon", assetDiag.Message);
+    }
+
+    [Fact]
+    public async Task GetAssetDiagnosticsAsync_PrefabOverride_ReportsUnity0003OnPropertyPath()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = GetDummyProjectRoot();
+        using AssetDataServiceImpl service = await CreateInitializedServiceAsync(projectRoot, tempDir.Path);
+        string scenePath = Path.Combine(projectRoot, "Assets", "Scenes", "MainScene.unity");
+
+        AssetDiagnosticDto[] diags = await service.GetAssetDiagnosticsAsync(scenePath);
+        AssetDiagnosticDto diag = Assert.Single(diags, d => d.Code == "UNITY0003");
+        Assert.Equal(43, diag.Line);
+        Assert.Equal(20, diag.StartCharacter);
+        Assert.Equal(26, diag.EndCharacter);
+        Assert.Contains("Player.prefab", diag.Message);
+        Assert.Contains("in MainScene.unity", diag.Message);
+        Assert.Contains("overrides", diag.Message);
+
+        string[] lines = File.ReadAllLines(scenePath);
+        Assert.Equal("config", lines[diag.Line].Substring(diag.StartCharacter, diag.EndCharacter - diag.StartCharacter));
+    }
+
+    [Fact]
+    public async Task GetAssetDiagnosticsAsync_UnindexedPrefabOverride_ReportsUnity0003FromScan()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = Path.Combine(tempDir.Path, "OverrideDiagProj");
+        const string basePrefabGuid = "bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc";
+        WriteAssetWithMeta(projectRoot, "Assets/Prefabs/Base.prefab", basePrefabGuid, "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n");
+
+        using AssetDataServiceImpl service = await CreateInitializedServiceAsync(projectRoot, Path.Combine(tempDir.Path, "db.sqlite"));
+
+        string variantPath = Path.Combine(projectRoot, "Assets", "Prefabs", "Variant.prefab");
+        string variantText = string.Join("\n",
+        [
+            "%YAML 1.1",
+            "%TAG !u! tag:unity3d.com,2011:",
+            "--- !u!1001 &300000",
+            "PrefabInstance:",
+            "  m_Modification:",
+            "    m_Modifications:",
+            $"    - target: {{fileID: 100014, guid: {basePrefabGuid}, type: 3}}",
+            "      propertyPath: config",
+            "      value: 42",
+        ]);
+        File.WriteAllText(variantPath, variantText, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        AssetDiagnosticDto[] diags = await service.GetAssetDiagnosticsAsync(variantPath);
+        AssetDiagnosticDto diag = Assert.Single(diags, d => d.Code == "UNITY0003");
+        Assert.Equal(7, diag.Line);
+        Assert.Contains("Base.prefab", diag.Message);
+    }
+
+    [Fact]
     public async Task AssetFileWatcher_DebouncesFileEventsAndUpdatesStoreAndGraph()
     {
         using var tempDir = new TempDirectoryScope();
@@ -493,6 +610,159 @@ public sealed class AssetDataServiceImplTests
         Assert.True(removed, "Expected AssetFileWatcher to remove deleted prefab from graph.");
         Assert.Null(await service.GetAssetByPathAsync("Assets/Prefabs/Enemy.prefab"));
     }
+
+    [Fact]
+    public async Task GetHierarchyAsync_RepeatedRequests_ReuseCachedResult()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = GetDummyProjectRoot();
+        using AssetDataServiceImpl service = await CreateInitializedServiceAsync(projectRoot, tempDir.Path);
+
+        Assert.Equal(0, service.HierarchyCache.Count);
+
+        AssetHierarchyNodeDto[] first = await service.GetHierarchyAsync("Assets/Prefabs/Player.prefab", 8, true);
+        Assert.Equal(0, service.HierarchyCache.Hits);
+        Assert.Equal(1, service.HierarchyCache.Misses);
+        Assert.Equal(1, service.HierarchyCache.Count);
+
+        string fullPath = Path.GetFullPath(Path.Combine(projectRoot, "Assets", "Prefabs", "Player.prefab"));
+        AssetHierarchyNodeDto[] second = await service.GetHierarchyAsync(fullPath, 8, true);
+        Assert.Equal(1, service.HierarchyCache.Hits);
+        Assert.Equal(1, service.HierarchyCache.Misses);
+        Assert.Equal(first.Length, second.Length);
+        Assert.Equal("Player", Assert.Single(second).Name);
+
+        await service.GetHierarchyAsync(fullPath, 4, true);
+        Assert.Equal(2, service.HierarchyCache.Misses);
+        Assert.Equal(2, service.HierarchyCache.Count);
+
+        await service.RescanAsync();
+        Assert.Equal(0, service.HierarchyCache.Count);
+        await service.GetHierarchyAsync(fullPath, 8, true);
+        Assert.Equal(3, service.HierarchyCache.Misses);
+    }
+
+    [Fact]
+    public async Task GetHierarchyAsync_Invalidation_RebuildsFromUpdatedFile()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = Path.Combine(tempDir.Path, "CacheProj");
+        string prefabPath = WriteAssetWithMeta(
+            projectRoot,
+            "Assets/Prefabs/Cached.prefab",
+            "55555555555555555555555555555555",
+            HierarchyPrefabYaml("Before"));
+
+        using AssetDataServiceImpl service = await CreateInitializedServiceAsync(
+            projectRoot,
+            Path.Combine(tempDir.Path, "db.sqlite"));
+
+        Assert.Equal("Before", Assert.Single(await service.GetHierarchyAsync(prefabPath, 8, false)).Name);
+        Assert.Equal(1, service.HierarchyCache.Count);
+
+        File.WriteAllText(prefabPath, HierarchyPrefabYaml("After"), new UTF8Encoding(false));
+        Assert.Equal("Before", Assert.Single(await service.GetHierarchyAsync(prefabPath, 8, false)).Name);
+
+        Assert.Equal(1, service.HierarchyCache.Invalidate(prefabPath));
+        Assert.Equal("After", Assert.Single(await service.GetHierarchyAsync(prefabPath, 8, false)).Name);
+    }
+
+    [Fact]
+    public async Task GetHierarchyAsync_FileWatcherUpdate_InvalidatesCachedHierarchy()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = Path.Combine(tempDir.Path, "WatchCacheProj");
+        string prefabPath = WriteAssetWithMeta(
+            projectRoot,
+            "Assets/Prefabs/Watched.prefab",
+            "66666666666666666666666666666666",
+            HierarchyPrefabYaml("Original"));
+
+        using var service = new AssetDataServiceImpl(
+            projectRoot,
+            Path.Combine(tempDir.Path, "db.sqlite"),
+            enableFileWatcher: true,
+            watcherDebounceWindow: TimeSpan.FromMilliseconds(100));
+        await service.InitializeAndSyncAsync();
+
+        Assert.Equal("Original", Assert.Single(await service.GetHierarchyAsync(prefabPath, 8, false)).Name);
+        Assert.Equal(1, service.HierarchyCache.Count);
+
+        File.WriteAllText(prefabPath, HierarchyPrefabYaml("Renamed"), new UTF8Encoding(false));
+
+        bool invalidated = await WaitUntilAsync(
+            () => Task.FromResult(service.HierarchyCache.Count == 0),
+            TimeSpan.FromSeconds(5));
+        Assert.True(invalidated, "Expected the file watcher to invalidate the cached hierarchy.");
+        Assert.Equal("Renamed", Assert.Single(await service.GetHierarchyAsync(prefabPath, 8, false)).Name);
+    }
+
+    [Fact]
+    public async Task GetAssetDiagnosticsAsync_PackageCacheGuid_SuppressesUnity0002()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = Path.Combine(tempDir.Path, "PackageCacheDiagProj");
+        const string packageGuid = "77777777777777777777777777777777";
+        const string missingGuid = "88888888888888888888888888888888";
+        const string validScriptGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        WriteAssetWithMeta(projectRoot, "Assets/Scripts/ValidScript.cs", validScriptGuid, "public class ValidScript {}");
+        string scenePath = WriteAssetWithMeta(
+            projectRoot,
+            "Assets/Scenes/WithPackage.unity",
+            "99999999999999999999999999999999",
+            string.Join("\n",
+            [
+                "%YAML 1.1",
+                "%TAG !u! tag:unity3d.com,2011:",
+                "--- !u!114 &100014",
+                "MonoBehaviour:",
+                $"  m_Script: {{fileID: 11500000, guid: {validScriptGuid}, type: 3}}",
+                $"  packageRef: {{fileID: 11400000, guid: {packageGuid}, type: 2}}",
+                $"  missingRef: {{fileID: 11400000, guid: {missingGuid}, type: 2}}",
+            ]));
+
+        string packageMetaPath = Path.Combine(
+            projectRoot,
+            "Library",
+            "PackageCache",
+            "com.example.pkg@1.0.0",
+            "Runtime",
+            "PkgAsset.asset.meta");
+        Directory.CreateDirectory(Path.GetDirectoryName(packageMetaPath)!);
+        File.WriteAllText(
+            packageMetaPath,
+            $"fileFormatVersion: 2\nguid: {packageGuid}\n",
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        using AssetDataServiceImpl service = await CreateInitializedServiceAsync(
+            projectRoot,
+            Path.Combine(tempDir.Path, "db.sqlite"));
+
+        AssetDiagnosticDto[] diags = await service.GetAssetDiagnosticsAsync(scenePath);
+        AssetDiagnosticDto diag = Assert.Single(diags);
+        Assert.Equal("UNITY0002", diag.Code);
+        Assert.Contains(missingGuid, diag.Message);
+        Assert.DoesNotContain(packageGuid, diag.Message);
+        Assert.True(service.PackageCacheGuidIndex.Contains(packageGuid));
+        Assert.False(service.PackageCacheGuidIndex.Contains(missingGuid));
+    }
+
+    private static string HierarchyPrefabYaml(string name) => string.Join("\n",
+    [
+        "%YAML 1.1",
+        "%TAG !u! tag:unity3d.com,2011:",
+        "--- !u!1 &100000",
+        "GameObject:",
+        "  m_Component:",
+        "  - component: {fileID: 100004}",
+        $"  m_Name: {name}",
+        "--- !u!4 &100004",
+        "Transform:",
+        "  m_GameObject: {fileID: 100000}",
+        "  m_Father: {fileID: 0}",
+        "  m_RootOrder: 0",
+    ]);
 
     private static async Task<AssetDataServiceImpl> CreateInitializedServiceAsync(string projectRoot, string dbDir)
     {

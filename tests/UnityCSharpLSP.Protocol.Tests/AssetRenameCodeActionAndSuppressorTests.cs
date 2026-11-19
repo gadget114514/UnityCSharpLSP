@@ -418,6 +418,10 @@ public sealed class AssetRenameCodeActionAndSuppressorTests
                 Capabilities = new ClientCapabilities(),
             });
 
+        await client.NotifyWithParameterObjectAsync(
+            Methods.WorkspaceDidChangeConfigurationName,
+            new { settings = new { propagateRenamesToAssets = true } });
+
         return (server, client, dummyPath);
     }
 

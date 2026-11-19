@@ -389,6 +389,10 @@ public static class HierarchyBuilder
                                 currentComponent.ScriptGuid = scriptGuid.Value;
                             }
                         }
+                        else if (key.SequenceEqual("m_EditorClassIdentifier"u8))
+                        {
+                            currentComponent.EditorClassIdentifier = UnityYamlSpanReader.DecodeYamlScalarString(value);
+                        }
                         else if (currentComponent.SerializedFields is not null && !IsBuiltInMonoBehaviourKey(key))
                         {
                             string fieldName = Encoding.UTF8.GetString(key);
@@ -942,6 +946,7 @@ public static class HierarchyBuilder
                 TypeName = typeName,
                 ScriptGuid = scriptGuidHex,
                 ScriptPath = scriptPath,
+                EditorClassIdentifier = comp.EditorClassIdentifier,
                 Line = comp.Line,
                 SerializedFields = comp.SerializedFields,
             };
@@ -1005,6 +1010,7 @@ public static class HierarchyBuilder
         public int Line { get; init; }
         public long GameObjectFileId { get; set; }
         public AssetGuid? ScriptGuid { get; set; }
+        public string? EditorClassIdentifier { get; set; }
         public Dictionary<string, string>? SerializedFields { get; init; }
     }
 

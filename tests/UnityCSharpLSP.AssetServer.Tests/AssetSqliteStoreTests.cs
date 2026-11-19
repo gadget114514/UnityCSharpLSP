@@ -98,6 +98,28 @@ public sealed class AssetSqliteStoreTests
     }
 
     [Fact]
+    public async Task GetPrefabModificationsByTarget_DummyProject_FindsOverrideInScene()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string dbPath = Path.Combine(tempDir.Path, "asset-db.sqlite");
+
+        using var store = new AssetSqliteStore(GetDummyProjectRoot(), dbPath);
+        await store.SyncWorkspaceAsync();
+
+        PrefabOverrideModification[] mods = store.GetPrefabModificationsByTarget(PlayerPrefabGuid, 100014);
+        PrefabOverrideModification mod = Assert.Single(mods);
+        Assert.Equal("config", mod.PropertyPath);
+        Assert.Equal("config", mod.RootFieldName);
+        Assert.Equal(43, mod.LineNumber);
+        Assert.Equal("Assets/Scenes/MainScene.unity", mod.OwningAssetRelativePath);
+        Assert.Equal(PlayerPrefabGuid, mod.TargetGuid);
+        Assert.Equal(100014, mod.TargetFileId);
+
+        Assert.Empty(store.GetPrefabModificationsByTarget(PlayerPrefabGuid, 999999999));
+        Assert.Empty(store.GetPrefabModificationsByTarget(AssetGuid.Zero, 100014));
+    }
+
+    [Fact]
     public async Task QueryMethods_DummyProject_ReturnClassFieldAndMethodReferences()
     {
         using var tempDir = new TempDirectoryScope();

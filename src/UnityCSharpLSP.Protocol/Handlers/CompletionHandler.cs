@@ -5,6 +5,8 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
+using UnityCSharpLSP.AssetServer.Contracts;
+using UnityCSharpLSP.AssetServer.Parsing;
 using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Semantics.Features;
 using UnityCSharpLSP.Workspace;
@@ -16,6 +18,8 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 /// </summary>
 public sealed class CompletionHandler
 {
+    private const int MaxAssetHierarchyCompletionItems = 200;
+
     private readonly WorkspaceManagerProvider _workspaceManagerProvider;
     private readonly ClientCapabilityStore _clientCapabilities;
 
@@ -40,7 +44,9 @@ public sealed class CompletionHandler
         var doc = ws.GetDocument(filePath);
         if (doc is null)
         {
-            return null;
+            return UnityAssetFileHelper.IsYamlAssetFile(filePath)
+                ? await AddAssetGuidCompletionsAsync(ws, filePath, @params.Position, ct).ConfigureAwait(false)
+                : null;
         }
 
         var sourceText = await doc.GetTextAsync(ct).ConfigureAwait(false);
@@ -74,6 +80,13 @@ public sealed class CompletionHandler
         {
             await AddBuildSceneCompletionsAsync(ws, items, ct).ConfigureAwait(false);
             return items.Count > 0 ? items.ToArray() : null;
+        }
+
+        if (IsGetComponentTypeArgumentPosition(root, position))
+        {
+            var componentTypes = new List<CompletionItem>();
+            await AddAssetComponentTypeCompletionsAsync(ws, componentTypes, ct).ConfigureAwait(false);
+            return componentTypes.Count > 0 ? componentTypes.ToArray() : null;
         }
 
         var token = root.FindToken(position > 0 ? position - 1 : 0);
@@ -126,6 +139,7 @@ public sealed class CompletionHandler
                 if (classSymbol is not null && MonoBehaviourMessages.InheritsFrom(classSymbol, "MonoBehaviour"))
                 {
                     AddMonoBehaviourMessages(items);
+                    await AddAssetGameObjectCompletionsAsync(ws, classSymbol, items, seen, ct).ConfigureAwait(false);
                 }
             }
         }
@@ -220,6 +234,93 @@ public sealed class CompletionHandler
         return string.Join(" ", lines);
     }
 
+    private static async Task<CompletionItem[]?> AddAssetGuidCompletionsAsync(
+        UnityWorkspaceManager ws,
+        string filePath,
+        Position position,
+        CancellationToken ct)
+    {
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(filePath);
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        if ((uint)position.Line >= (uint)lines.Length)
+        {
+            return null;
+        }
+
+        string lineText = lines[position.Line];
+        int guidIndex = lineText.IndexOf("guid:", StringComparison.OrdinalIgnoreCase);
+        if (guidIndex < 0)
+        {
+            return null;
+        }
+
+        int valueStart = guidIndex + "guid:".Length;
+        while (valueStart < lineText.Length && (lineText[valueStart] == ' ' || lineText[valueStart] == '\t'))
+        {
+            valueStart++;
+        }
+
+        if (position.Character < valueStart || position.Character > lineText.Length)
+        {
+            return null;
+        }
+
+        AssetKind? kind = null;
+        if (lineText.Contains("m_Script:", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = AssetKind.CSharpScript;
+        }
+        else if (lineText.Contains("m_SourcePrefab:", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = AssetKind.Prefab;
+        }
+
+        AssetEntryDto[] assets = await ws.AssetService.GetAssetsAsync(kind, ct).ConfigureAwait(false);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var items = new List<CompletionItem>();
+
+        foreach (AssetEntryDto asset in assets)
+        {
+            string label = Path.GetFileNameWithoutExtension(asset.RelativePath);
+            if (string.IsNullOrWhiteSpace(label) || !seen.Add(asset.Guid))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = label,
+                Kind = kind == AssetKind.CSharpScript
+                    ? CompletionItemKind.Class
+                    : kind == AssetKind.Prefab
+                        ? CompletionItemKind.Reference
+                        : CompletionItemKind.File,
+                Detail = asset.RelativePath,
+                InsertText = asset.Guid,
+                Documentation = asset.FullPath,
+            });
+
+            if (items.Count >= 500)
+            {
+                break;
+            }
+        }
+
+        return items.Count > 0 ? items.ToArray() : null;
+    }
+
     private static async Task AddBuildSceneCompletionsAsync(
         UnityWorkspaceManager ws,
         List<CompletionItem> items,
@@ -259,6 +360,248 @@ public sealed class CompletionHandler
                     Detail = $"Build Scene #{scene.BuildIndex}: {scene.SceneName}",
                     Documentation = scene.FullPath,
                 });
+            }
+        }
+    }
+
+    private static bool IsGetComponentTypeArgumentPosition(SyntaxNode root, int position)
+    {
+        if (position <= 0)
+        {
+            return false;
+        }
+
+        SyntaxToken current = root.FindToken(position - 1);
+        if (current.IsKind(SyntaxKind.EndOfFileToken))
+        {
+            return false;
+        }
+
+        while (current.IsKind(SyntaxKind.IdentifierToken))
+        {
+            SyntaxToken previous = current.GetPreviousToken();
+            if (previous.IsKind(SyntaxKind.DotToken))
+            {
+                SyntaxToken qualifier = previous.GetPreviousToken();
+                if (!qualifier.IsKind(SyntaxKind.IdentifierToken))
+                {
+                    return false;
+                }
+
+                current = qualifier;
+                continue;
+            }
+
+            current = previous;
+            break;
+        }
+
+        if (!current.IsKind(SyntaxKind.LessThanToken))
+        {
+            return false;
+        }
+
+        SyntaxToken method = current.GetPreviousToken();
+        return method.IsKind(SyntaxKind.IdentifierToken) &&
+               string.Equals(method.ValueText, "GetComponent", StringComparison.Ordinal);
+    }
+
+    private static async Task AddAssetComponentTypeCompletionsAsync(
+        UnityWorkspaceManager ws,
+        List<CompletionItem> items,
+        CancellationToken ct)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        await AddComponentTypeCompletionsFromKindAsync(ws, AssetKind.Prefab, seen, items, ct).ConfigureAwait(false);
+        await AddComponentTypeCompletionsFromKindAsync(ws, AssetKind.Scene, seen, items, ct).ConfigureAwait(false);
+    }
+
+    private static async Task AddComponentTypeCompletionsFromKindAsync(
+        UnityWorkspaceManager ws,
+        AssetKind kind,
+        HashSet<string> seen,
+        List<CompletionItem> items,
+        CancellationToken ct)
+    {
+        AssetEntryDto[] assets = await ws.AssetService.GetAssetsAsync(kind, ct).ConfigureAwait(false);
+
+        foreach (AssetEntryDto asset in assets)
+        {
+            if (items.Count >= MaxAssetHierarchyCompletionItems)
+            {
+                break;
+            }
+
+            string assetPath = !string.IsNullOrWhiteSpace(asset.RelativePath)
+                ? asset.RelativePath
+                : asset.FullPath;
+            if (string.IsNullOrWhiteSpace(assetPath))
+            {
+                continue;
+            }
+
+            AssetHierarchyNodeDto[] hierarchy = await ws.AssetService
+                .GetHierarchyAsync(assetPath, maxDepth: 16, includeSerializedValues: false, ct)
+                .ConfigureAwait(false);
+
+            foreach (AssetHierarchyNodeDto root in hierarchy)
+            {
+                CollectPrefabComponentTypes(root, assetPath, seen, items);
+                if (items.Count >= MaxAssetHierarchyCompletionItems)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    private static void CollectPrefabComponentTypes(
+        AssetHierarchyNodeDto node,
+        string prefabPath,
+        HashSet<string> seen,
+        List<CompletionItem> items)
+    {
+        foreach (AssetComponentSummaryDto component in node.Components)
+        {
+            if (!UnityComponentTypeMap.TryGetTypeName(component, out string typeName) || !seen.Add(typeName))
+            {
+                continue;
+            }
+
+            items.Add(new CompletionItem
+            {
+                Label = typeName,
+                Kind = CompletionItemKind.Class,
+                Detail = $"from {prefabPath}",
+            });
+
+            if (items.Count >= MaxAssetHierarchyCompletionItems)
+            {
+                return;
+            }
+        }
+
+        foreach (AssetHierarchyNodeDto child in node.Children)
+        {
+            CollectPrefabComponentTypes(child, prefabPath, seen, items);
+            if (items.Count >= MaxAssetHierarchyCompletionItems)
+            {
+                return;
+            }
+        }
+    }
+
+    private static async Task AddAssetGameObjectCompletionsAsync(
+        UnityWorkspaceManager ws,
+        INamedTypeSymbol classSymbol,
+        List<CompletionItem> items,
+        HashSet<string> seen,
+        CancellationToken ct)
+    {
+        if (!UnitySymbolGuidHelper.TryGetScriptGuid(classSymbol, out string scriptGuid))
+        {
+            return;
+        }
+
+        AssetReferenceResultDto references = await ws.AssetService.FindReferencesAsync(
+            new AssetReferenceQueryDto
+            {
+                ScriptGuid = scriptGuid,
+                MemberKind = AssetMemberKind.Class,
+                IncludeTransitiveScenes = false,
+                MaxResults = MaxAssetHierarchyCompletionItems,
+            },
+            ct).ConfigureAwait(false);
+
+        int itemLimit = items.Count + MaxAssetHierarchyCompletionItems;
+        var visitedPrefabs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (AssetReferenceLocationDto location in references.Locations)
+        {
+            if (items.Count >= itemLimit)
+            {
+                break;
+            }
+
+            if (location.AssetKind != AssetKind.Prefab || string.IsNullOrWhiteSpace(location.RelativePath) ||
+                !visitedPrefabs.Add(location.RelativePath))
+            {
+                continue;
+            }
+
+            AssetHierarchyNodeDto[] hierarchy = await ws.AssetService
+                .GetHierarchyAsync(location.RelativePath, maxDepth: 16, includeSerializedValues: false, ct)
+                .ConfigureAwait(false);
+
+            foreach (AssetHierarchyNodeDto root in hierarchy)
+            {
+                CollectPrefabGameObjectNames(root, location.RelativePath, seen, items, itemLimit);
+                if (items.Count >= itemLimit)
+                {
+                    break;
+                }
+            }
+        }
+
+        AssetEntryDto[] scenes = await ws.AssetService.GetAssetsAsync(AssetKind.Scene, ct).ConfigureAwait(false);
+        var visitedScenes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (AssetEntryDto scene in scenes)
+        {
+            if (items.Count >= itemLimit)
+            {
+                break;
+            }
+
+            string scenePath = !string.IsNullOrWhiteSpace(scene.RelativePath)
+                ? scene.RelativePath
+                : scene.FullPath;
+            if (string.IsNullOrWhiteSpace(scenePath) || !visitedScenes.Add(scenePath))
+            {
+                continue;
+            }
+
+            AssetHierarchyNodeDto[] hierarchy = await ws.AssetService
+                .GetHierarchyAsync(scenePath, maxDepth: 16, includeSerializedValues: false, ct)
+                .ConfigureAwait(false);
+
+            foreach (AssetHierarchyNodeDto root in hierarchy)
+            {
+                CollectPrefabGameObjectNames(root, scenePath, seen, items, itemLimit);
+                if (items.Count >= itemLimit)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    private static void CollectPrefabGameObjectNames(
+        AssetHierarchyNodeDto node,
+        string prefabPath,
+        HashSet<string> seen,
+        List<CompletionItem> items,
+        int itemLimit)
+    {
+        if (!string.IsNullOrWhiteSpace(node.Name) && seen.Add(node.Name))
+        {
+            items.Add(new CompletionItem
+            {
+                Label = node.Name,
+                Kind = CompletionItemKind.Variable,
+                Detail = $"GameObject in {prefabPath}",
+            });
+
+            if (items.Count >= itemLimit)
+            {
+                return;
+            }
+        }
+
+        foreach (AssetHierarchyNodeDto child in node.Children)
+        {
+            CollectPrefabGameObjectNames(child, prefabPath, seen, items, itemLimit);
+            if (items.Count >= itemLimit)
+            {
+                return;
             }
         }
     }

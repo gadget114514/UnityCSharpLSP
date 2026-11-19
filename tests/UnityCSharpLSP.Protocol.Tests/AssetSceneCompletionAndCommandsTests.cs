@@ -398,6 +398,43 @@ public sealed class AssetSceneCompletionAndCommandsTests
             Path.GetFullPath(right),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
+    [Fact]
+    public async Task Completion_OnPrefabScriptGuid_ReturnsScriptAssetsAsGuidInsertions()
+    {
+        var (server, client, dummyPath) = await CreateInitializedSessionAsync();
+        try
+        {
+            var prefabPath = Path.Combine(dummyPath, "Assets", "Prefabs", "Player.prefab");
+            var prefabUri = new Uri(prefabPath);
+            string[] lines = await File.ReadAllLinesAsync(prefabPath);
+            int lineIndex = Array.FindIndex(lines, l => l.Contains("m_Script:", StringComparison.Ordinal));
+            Assert.True(lineIndex >= 0);
+
+            int guidIndex = lines[lineIndex].IndexOf("guid:", StringComparison.Ordinal) + "guid:".Length;
+            while (guidIndex < lines[lineIndex].Length && lines[lineIndex][guidIndex] == ' ')
+            {
+                guidIndex++;
+            }
+
+            var items = await client.InvokeWithParameterObjectAsync<CompletionItem[]?>(
+                Methods.TextDocumentCompletionName,
+                new CompletionParams
+                {
+                    TextDocument = new TextDocumentIdentifier { Uri = prefabUri },
+                    Position = new Position { Line = lineIndex, Character = guidIndex + 4 },
+                });
+
+            Assert.NotNull(items);
+            CompletionItem scriptItem = Assert.Single(items!, i => i.Label == "PlayerController");
+            Assert.Equal(PlayerControllerGuid, scriptItem.InsertText);
+            Assert.Equal("Assets/Scripts/PlayerController.cs", scriptItem.Detail);
+        }
+        finally
+        {
+            await ShutdownAsync(server, client);
+        }
+    }
+
     private static async Task<(LspJsonRpcSession Server, JsonRpc Client, string DummyPath)> CreateInitializedSessionAsync()
     {
         var rootPath = GetDummyProjectPath();

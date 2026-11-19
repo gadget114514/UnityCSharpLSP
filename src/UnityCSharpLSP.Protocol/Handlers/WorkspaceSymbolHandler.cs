@@ -1,8 +1,11 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
+using UnityCSharpLSP.AssetServer.Contracts;
 using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Workspace;
+using LspLocation = Microsoft.VisualStudio.LanguageServer.Protocol.Location;
+using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
 using LspSymbolKind = Microsoft.VisualStudio.LanguageServer.Protocol.SymbolKind;
 
 namespace UnityCSharpLSP.Protocol.Handlers;
@@ -14,6 +17,7 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 public sealed class WorkspaceSymbolHandler
 {
     private const int PartialResultBatchSize = 100;
+    private const int MaxResults = 200;
 
     private readonly Func<IReadOnlyList<UnityWorkspaceManager>> _allManagersProvider;
     private readonly JsonRpc _rpc;
@@ -75,6 +79,71 @@ public sealed class WorkspaceSymbolHandler
                     {
                         results.Add(info);
                     }
+                }
+            }
+        }
+
+        if (query.Length > 0 && results.Count < MaxResults)
+        {
+            foreach (var ws in managers)
+            {
+                var assets = await ws.AssetService.GetAssetsAsync(null, ct).ConfigureAwait(false);
+                foreach (var asset in assets)
+                {
+                    if (results.Count >= MaxResults)
+                    {
+                        break;
+                    }
+
+                    if (asset.Kind == AssetKind.CSharpScript)
+                    {
+                        continue;
+                    }
+
+                    var name = Path.GetFileNameWithoutExtension(asset.RelativePath);
+                    if (string.IsNullOrEmpty(name) ||
+                        !name.Contains(query, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(asset.FullPath))
+                    {
+                        continue;
+                    }
+
+                    var origin = new Position(0, 0);
+                    var location = new LspLocation
+                    {
+                        Uri = new Uri(Path.GetFullPath(asset.FullPath)),
+                        Range = new LspRange { Start = origin, End = origin },
+                    };
+
+                    var key = $"{name}|{location.Uri.LocalPath}|0|0";
+                    if (!seen.Add(key))
+                    {
+                        continue;
+                    }
+
+                    var detail = $"{asset.Kind} — {asset.RelativePath}";
+                    results.Add(new WorkspaceSymbol
+                    {
+                        Name = name,
+                        Kind = LspSymbolKind.File,
+                        Location = location,
+                        Detail = detail,
+                        Data = new WorkspaceSymbolData
+                        {
+                            Detail = detail,
+                            Kind = LspSymbolKind.File,
+                            Workspaces = new[] { ws.ProjectInfo.ProjectRootPath },
+                        },
+                    });
+                }
+
+                if (results.Count >= MaxResults)
+                {
+                    break;
                 }
             }
         }

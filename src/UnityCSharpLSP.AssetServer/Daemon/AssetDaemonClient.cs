@@ -225,6 +225,12 @@ public sealed class AssetDaemonClient : IAssetDataService, IDisposable
         return await target.GetHierarchyAsync(assetPath, maxDepth, includeSerializedValues, ct).ConfigureAwait(false);
     }
 
+    public async Task<AssetEntryDto[]> GetAssetsAsync(AssetKind? kind, CancellationToken ct = default)
+    {
+        IAssetDataService target = await EnsureInitializedAsync(ct).ConfigureAwait(false);
+        return await target.GetAssetsAsync(kind, ct).ConfigureAwait(false);
+    }
+
     public async Task<BuildSceneDto[]> GetBuildScenesAsync(CancellationToken ct = default)
     {
         IAssetDataService target = await EnsureInitializedAsync(ct).ConfigureAwait(false);

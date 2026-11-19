@@ -273,6 +273,9 @@ public sealed class AssetComponentSummaryDto
     [JsonProperty("scriptPath")]
     public string? ScriptPath { get; set; }
 
+    [JsonProperty("editorClassIdentifier")]
+    public string? EditorClassIdentifier { get; set; }
+
     [JsonProperty("line")]
     public int Line { get; set; }
 
@@ -334,7 +337,7 @@ public sealed class BuildSceneDto
 public sealed class AssetDiagnosticDto
 {
     [JsonProperty("code")]
-    public string Code { get; set; } = string.Empty; // "UNITY0001" (Missing Script) | "UNITY0002" (Dangling Ref)
+    public string Code { get; set; } = string.Empty; // "UNITY0001" (Missing Script) | "UNITY0002" (Dangling Ref) | "UNITY0003" (Prefab Override Impact)
 
     [JsonProperty("message")]
     public string Message { get; set; } = string.Empty;

@@ -19,12 +19,16 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
   - Real-time Roslyn compiler error/warning diagnostics.
   - Suppresses false-positive `CS0649` warnings on `[SerializeField]` private fields and `IDE0051` unused-method warnings on methods referenced by `UnityEvent` in `.prefab` / `.unity` assets.
   - Reports Missing Script (`UNITY0001`) warnings directly on `.prefab`, `.unity`, and `.asset` files.
+  - Optionally reports Dangling Asset References (`UNITY0002`) — unresolved `guid:` references such as deleted prefabs or assets (`reportDanglingAssetReferences`, default `false`).
+  - Optionally reports Prefab Override Impact (`UNITY0003`) — `m_Modifications` entries that override a base prefab's serialized fields (`reportPrefabOverrideImpact`, default `false`).
+  - Optionally reports Unattached Scripts (`UNITY0004`) as `Hint` diagnostics on C# declarations of concrete `MonoBehaviour` / `ScriptableObject` types whose GUID never appears in any prefab or scene (`reportUnattachedScripts`, default `false`).
 - **🧩 Prefab & Scene Bidirectional Intelligence (`--asset-daemon`)**:
   - **Shared Persistent Asset Data Daemon**: Automatically spawns one lightweight `--asset-daemon` process per project root over Named Pipe (`StreamJsonRpc`), backed by a zero-allocation UTF-8 YAML scanner, an in-memory reference graph, and SQLite (WAL + mmap) at `Library/UnityCSharpLSP/asset-db.sqlite` (with automatic in-process fallback when needed).
   - **Cross-Asset References & CodeLens**: `textDocument/references` and `textDocument/codeLens` resolve direct and transitive `.prefab` / `.unity` / `.asset` usages (including Prefab Variants, serialized fields, `m_Modifications` overrides, and `UnityEvent` calls).
   - **Safe Refactoring Across YAML**: `textDocument/rename` propagates serialized field and `UnityEvent` method renames into `.prefab` / `.unity` / `.asset` files; `textDocument/codeAction` offers `Add [FormerlySerializedAs("<fieldName>")]`.
   - **YAML Navigation & Hierarchy Outline**: `textDocument/documentLink`, `textDocument/definition`, `textDocument/hover` (enriched with C# signatures, XML docs, and `[Tooltip]`), and `textDocument/documentSymbol` work directly on `.prefab`, `.unity`, and `.asset` files.
   - **`SceneManager.LoadScene` Support**: Completes enabled scenes from `ProjectSettings/EditorBuildSettings.asset` inside `SceneManager.LoadScene("` / `LoadSceneAsync("` and links/jumps directly to the `.unity` scene file.
+  - **YAML GUID Completion**: On a `guid:` line in `.prefab` / `.unity` / `.asset`, completes indexed assets by name and inserts their GUID (scripts for `m_Script`, prefabs for `m_SourcePrefab`, all assets otherwise).
 - **⚡ Core Language Server Features**:
   - **Go to Definition (`textDocument/definition`)**: Seamless navigation across `.asmdef` boundaries, YAML asset references, and `SceneManager.LoadScene` calls.
   - **Hover Tooltips (`textDocument/hover`)**: Rich method and type signatures with XML `<summary>` doc comments (plus `[Tooltip]` enrichment when hovering serialized fields in YAML).
@@ -39,7 +43,7 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
   - Accepts multiple `workspaceFolders`; a `WorkspaceRouter` builds one Roslyn workspace per root and routes each document to the longest matching root prefix. Single-root (`rootUri` / `rootPath`) behaviour is unchanged.
 - **🧩 Workspace Commands & Configuration**:
   - `workspace/executeCommand` supports `unitycsharp.reloadWorkspace` (rebuild workspaces & rescan AssetServer), `unitycsharp.showWorkspaceInfo` (summary), `unitycsharp.getSceneOrPrefabHierarchy` (GameObject/Component JSON tree), `unitycsharp.findSymbolUsagesInAssets`, and `unitycsharp.assetServerStatus`.
-  - `workspace/didChangeConfiguration` stores typed settings (`enableDiagnostics`, `predefinedSymbols`) and can disable diagnostic publication.
+  - `workspace/didChangeConfiguration` stores typed settings (`enableDiagnostics`, `predefinedSymbols`, `propagateRenamesToAssets`, `reportDanglingAssetReferences`, `reportPrefabOverrideImpact`, `reportUnattachedScripts`) and can disable diagnostic publication. snake_case aliases are accepted for every setting.
   - Full file-operation events (`workspace/willCreateFiles` / `didCreateFiles`, `willRenameFiles` / `didRenameFiles`, `willDeleteFiles` / `didDeleteFiles`) keep the workspace in sync with editor file changes.
   - Advertises `positionEncoding: utf-16` and work-done progress for long-running commands.
 - **👀 Dynamic File Monitoring**:
@@ -95,6 +99,9 @@ lsp-refs --asset-daemon --workspace D:/MyUnityProject
 UnityCSharpLSP writes `.prefab`/`.unity`/`.asset` YAML directly and does **not** coordinate with the Unity Editor's serializer. To avoid conflicts:
 
 - **Cross-asset rename propagation is opt-in** (`propagateRenamesToAssets`, default `false`). Enable it only when Unity is closed or you accept LSP as the single writer.
+- **Dangling asset reference diagnostics are opt-in** (`reportDanglingAssetReferences`, default `false`). GUIDs that resolve only inside Unity's `Library/PackageCache` are not indexed, so enable this only when your `Packages/` folder is fully available.
+- **Prefab override impact diagnostics are opt-in** (`reportPrefabOverrideImpact`, default `false`). An `m_Modifications` entry decouples an overridden value from its base prefab, which can be intentional, so this diagnostic is disabled by default to avoid noise.
+- **Unattached script diagnostics are opt-in** (`reportUnattachedScripts`, default `false`). A script may be created before its first prefab/scene placement (or intentionally left as a utility base), so the `UNITY0004` hint is disabled by default to avoid noise.
 - When Unity is open, prefer Unity-driven renames for asset files; use the LSP for C#-only refactors.
 - File watchers reconcile external changes, but concurrent edits from both sides can still clash.
 - The asset daemon is one per project root; running multiple LSP instances against the same project root is not supported.
@@ -110,6 +117,8 @@ Unity projects store GameObjects, components, and serialized fields in `.prefab`
 - **YAML navigation**: go-to-definition, hover (with C# signatures, XML docs, `[Tooltip]`), and document symbols work directly inside `.prefab`/`.unity`/`.asset` files.
 - **Hierarchy outlines**: GameObject/Component/PrefabInstance trees for prefabs and scenes.
 - **Missing Script diagnostics**: `UNITY0001` warnings reported directly on asset files.
+- **Prefab Override Impact diagnostics**: opt-in `UNITY0003` warnings on `propertyPath` lines whose values override a base prefab.
+- **Unattached Script diagnostics**: opt-in `UNITY0004` hints on C# `MonoBehaviour` / `ScriptableObject` declarations that are never attached to any prefab or scene.
 - **SceneManager.LoadScene support**: completion and jump-to-scene for `SceneManager.LoadScene("...")`.
 - **No Unity Editor required**: all of the above runs headlessly from YAML + C# metadata, so AI agents and CI can use it.
 
@@ -391,7 +400,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 | `textDocument/typeDefinition` | Jumps to the type declaration of the symbol at the cursor | `TypeDefinitionHandler.cs` |
 | `textDocument/declaration` | Jumps to the symbol declaration (including `OriginalDefinition`) | `DeclarationHandler.cs` |
 | `textDocument/references` | Solution-wide C# reference search plus direct & transitive `.prefab` / `.unity` / `.asset` usages (`m_Script`, `m_SourcePrefab`, serialized fields, overrides, `UnityEvent`) | `ReferencesHandler.cs` |
-| `textDocument/completion` | Member completion, scope completion, MonoBehaviour message snippet completion, and enabled build-scene completion inside `SceneManager.LoadScene("` / `LoadSceneAsync("` | `CompletionHandler.cs` |
+| `textDocument/completion` | Member completion, scope completion, MonoBehaviour message snippet completion, enabled build-scene completion inside `SceneManager.LoadScene("` / `LoadSceneAsync("`, and indexed-asset GUID completion on YAML `guid:` lines | `CompletionHandler.cs` |
 | `completionItem/resolve` | Lazily resolves completion item `Detail` and XML documentation | `CompletionHandler.cs` |
 | `textDocument/documentSymbol` | Hierarchical outline of C# namespaces, types, and members, or GameObject/Component/PrefabInstance hierarchy tree for `.prefab` / `.unity` files | `DocumentSymbolHandler.cs` |
 | `textDocument/documentHighlight` | Highlights declarations and references within the same file | `DocumentHighlightHandler.cs` |
@@ -421,7 +430,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 | `textDocument/documentLink` | Links file paths in comments/strings, `SceneManager.LoadScene` / `LoadSceneAsync` scene names, and `guid:` asset references in `.prefab` / `.unity` / `.asset` | `DocumentLinkHandler.cs` |
 | `textDocument/linkedEditingRange` | Linked editing of `#if` / `#elif` / `#define` / `#undef` symbols and `#region` / `#endregion` labels | `LinkedEditingRangeHandler.cs` |
 | `textDocument/inlineValue` | Inline display of `= <value>` for constant-evaluable locals and fields (LSP 3.17) | `InlineValueHandler.cs` |
-| `textDocument/diagnostic` | Pull diagnostics for C# and `.prefab` / `.unity` / `.asset` (`UNITY0001` Missing Script). Returns `unchanged` when `resultId` matches, otherwise `full` | `PullDiagnosticsHandler.cs` |
+| `textDocument/diagnostic` | Pull diagnostics for C# and `.prefab` / `.unity` / `.asset` (`UNITY0001` Missing Script, opt-in `UNITY0002` Dangling Asset Reference, opt-in `UNITY0003` Prefab Override Impact, opt-in `UNITY0004` Unattached Script). Returns `unchanged` when `resultId` matches, otherwise `full` | `PullDiagnosticsHandler.cs` |
 | `workspaceSymbol/resolve` | Lazily fills `containerName` / `detail` / `kind` from the `data` of symbols returned by `workspace/symbol` (custom method) | `WorkspaceSymbolHandler.cs` |
 
 #### Client Capability Negotiation
@@ -456,7 +465,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 | `workspace/diagnostic` | request | Pull-style workspace diagnostics. Returns reports for all documents with `resultId`, and returns `unchanged` when `previousResultIds` match (also supports partial result tokens) |
 | `workspaceSymbol/resolve` | request | Fills in detailed information from a symbol's `data` (custom method) |
 | `workspace/executeCommand` | request | Executes `unitycsharp.reloadWorkspace`, `unitycsharp.showWorkspaceInfo`, `unitycsharp.getSceneOrPrefabHierarchy`, `unitycsharp.findSymbolUsagesInAssets`, and `unitycsharp.assetServerStatus` |
-| `workspace/didChangeConfiguration` | notification | Stores settings as a typed object. `enableDiagnostics` toggles push diagnostics on/off, and `predefinedSymbols` is also retained |
+| `workspace/didChangeConfiguration` | notification | Stores settings as a typed object. `enableDiagnostics` toggles push diagnostics on/off; `predefinedSymbols`, `propagateRenamesToAssets`, `reportDanglingAssetReferences`, `reportPrefabOverrideImpact`, and `reportUnattachedScripts` are retained |
 | `workspace/didChangeWatchedFiles` | notification | Detects creation, modification, and deletion of `.cs` files and reflects them in the Roslyn compilation |
 | `workspace/willRenameFiles` | request | Renames types matching the old file name to the new file name via the Roslyn `Renamer`, returning solution-wide `TextEdit[]` in `WorkspaceEdit.Changes` |
 | `workspace/didRenameFiles` | notification | Updates document paths after a rename (removes the old path, adds the new path) |
@@ -473,7 +482,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 
 | Method | Description |
 | :--- | :--- |
-| `textDocument/publishDiagnostics` | Publishes Roslyn compiler diagnostics and `.prefab` / `.unity` / `.asset` Missing Script warnings (`UNITY0001`). `CS0649` for `[SerializeField]` and `IDE0051` for `UnityEvent`-referenced methods are suppressed |
+| `textDocument/publishDiagnostics` | Publishes Roslyn compiler diagnostics plus `.prefab` / `.unity` / `.asset` Missing Script warnings (`UNITY0001`), the opt-in `UNITY0002` / `UNITY0003` asset diagnostics, and the opt-in `UNITY0004` C# hint for unattached scripts. `CS0649` for `[SerializeField]` and `IDE0051` for `UnityEvent`-referenced methods are suppressed |
 | `$/progress` | Notifies `workspace/symbol` partial results in batches of 100 as `SymbolInformation[]`. Also supports work-done progress for long-running commands (when `workDoneToken` is specified) |
 | `window/showMessage` | Notifies the result of `unitycsharp.showWorkspaceInfo` as an information message |
 

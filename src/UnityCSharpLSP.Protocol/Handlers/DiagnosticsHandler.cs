@@ -55,7 +55,7 @@ public sealed class DiagnosticsHandler
         var doc = ws.GetDocument(filePath);
         if (doc is null && UnityAssetFileHelper.IsYamlAssetFile(filePath))
         {
-            return await GetYamlAssetDiagnosticsAsync(ws, filePath, ct).ConfigureAwait(false);
+            return await GetYamlAssetDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
         }
 
         var semanticModel = doc is not null ? await doc.GetSemanticModelAsync(ct).ConfigureAwait(false) : null;
@@ -67,7 +67,16 @@ public sealed class DiagnosticsHandler
             diagnostics,
             ct).ConfigureAwait(false);
 
-        return ConvertDiagnostics(filteredDiagnostics);
+        var allDiagnostics = new List<RoslynDiagnostic>(filteredDiagnostics);
+        if (doc is not null && _settings.Current.ReportUnattachedScripts)
+        {
+            var unattached = await UnattachedScriptAnalyzer
+                .GetDiagnosticsAsync(ws, filePath, ct)
+                .ConfigureAwait(false);
+            allDiagnostics.AddRange(unattached);
+        }
+
+        return ConvertDiagnostics(allDiagnostics);
     }
 
     /// <summary>
@@ -113,12 +122,31 @@ public sealed class DiagnosticsHandler
             }).ConfigureAwait(false);
     }
 
-    private static async Task<Diagnostic[]> GetYamlAssetDiagnosticsAsync(
-        UnityWorkspaceManager ws,
+    private async Task<Diagnostic[]> GetYamlAssetDiagnosticsAsync(
         string filePath,
         CancellationToken ct)
     {
-        var assetDiagnostics = await ws.AssetService.GetAssetDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
+        var assetDiagnostics = await _workspaceManagerProvider(filePath)!.AssetService
+            .GetAssetDiagnosticsAsync(filePath, ct).ConfigureAwait(false);
+        if (assetDiagnostics.Length == 0)
+        {
+            return Array.Empty<Diagnostic>();
+        }
+
+        if (!_settings.Current.ReportDanglingAssetReferences)
+        {
+            assetDiagnostics = assetDiagnostics
+                .Where(d => d.Code != "UNITY0002")
+                .ToArray();
+        }
+
+        if (!_settings.Current.ReportPrefabOverrideImpact)
+        {
+            assetDiagnostics = assetDiagnostics
+                .Where(d => d.Code != "UNITY0003")
+                .ToArray();
+        }
+
         if (assetDiagnostics.Length == 0)
         {
             return Array.Empty<Diagnostic>();

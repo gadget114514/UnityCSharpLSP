@@ -52,6 +52,11 @@ public sealed class AssetFileWatcher : IDisposable
     /// </summary>
     public event Action<IReadOnlyCollection<string>>? BatchProcessed;
 
+    /// <summary>
+    /// Raised after a full workspace rescan has been committed, invalidating all incremental caches.
+    /// </summary>
+    public event Action? FullRescanProcessed;
+
     public AssetFileWatcher(AssetSqliteStore store, TimeSpan? debounceWindow = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
@@ -294,7 +299,14 @@ public sealed class AssetFileWatcher : IDisposable
                 }
             }
 
-            BatchProcessed?.Invoke(batch.ToArray());
+            if (needsFullRescan)
+            {
+                FullRescanProcessed?.Invoke();
+            }
+            else
+            {
+                BatchProcessed?.Invoke(batch.ToArray());
+            }
         }
         catch (OperationCanceledException)
         {

@@ -14,6 +14,7 @@ namespace UnityCSharpLSP.AssetServer.Daemon;
 /// </summary>
 public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
 {
+    private const int ClassIdGameObject = 1;
     private const int ClassIdMonoBehaviour = 114;
     private const int ClassIdPrefabInstance = 1001;
     private const int MaxRenameCandidateResults = 1_000_000;
@@ -51,6 +52,8 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
     private readonly InMemoryAssetGraph _graph;
     private readonly AssetFileWatcher? _watcher;
     private readonly SemaphoreSlim _syncLock = new(1, 1);
+    private readonly HierarchyCache _hierarchyCache = new();
+    private readonly PackageCacheGuidIndex _packageCacheGuidIndex;
 
     private volatile string _state = "Indexing";
     private bool _disposed;
@@ -59,6 +62,8 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
     public string DatabasePath => _store.DatabasePath;
     public AssetSqliteStore Store => _store;
     public InMemoryAssetGraph Graph => _graph;
+    public HierarchyCache HierarchyCache => _hierarchyCache;
+    public PackageCacheGuidIndex PackageCacheGuidIndex => _packageCacheGuidIndex;
 
     /// <summary>
     /// Raised when <see cref="ShutdownAsync"/> is invoked.
@@ -73,9 +78,29 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
     {
         _graph = new InMemoryAssetGraph();
         _store = new AssetSqliteStore(projectRoot, databasePath, _graph);
+        _packageCacheGuidIndex = new PackageCacheGuidIndex(_store.ProjectRoot);
         _watcher = enableFileWatcher
             ? new AssetFileWatcher(_store, watcherDebounceWindow)
             : null;
+
+        if (_watcher is not null)
+        {
+            _watcher.BatchProcessed += OnWatcherBatchProcessed;
+            _watcher.FullRescanProcessed += OnWatcherFullRescanProcessed;
+        }
+    }
+
+    private void OnWatcherBatchProcessed(IReadOnlyCollection<string> changedPaths)
+    {
+        foreach (string changedPath in changedPaths)
+        {
+            _hierarchyCache.Invalidate(changedPath);
+        }
+    }
+
+    private void OnWatcherFullRescanProcessed()
+    {
+        _hierarchyCache.Clear();
     }
 
     /// <summary>
@@ -150,6 +175,32 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
         ct.ThrowIfCancellationRequested();
 
         return Task.FromResult(_store.GetAssetByPath(filePath));
+    }
+
+    public Task<AssetEntryDto[]> GetAssetsAsync(AssetKind? kind, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        ct.ThrowIfCancellationRequested();
+
+        var result = new List<AssetEntryDto>();
+        foreach (AssetNode node in _graph.Current.AssetsById.Values)
+        {
+            if (kind.HasValue && node.Kind != kind.Value)
+            {
+                continue;
+            }
+
+            result.Add(new AssetEntryDto
+            {
+                AssetId = node.AssetId,
+                Guid = node.Guid.ToHexString(),
+                RelativePath = node.RelativePath,
+                FullPath = node.FullPath,
+                Kind = node.Kind,
+            });
+        }
+
+        return Task.FromResult(result.ToArray());
     }
 
     public Task<ScriptReferenceCountDto[]> GetScriptReferenceCountsAsync(string[] scriptGuids, CancellationToken ct = default)
@@ -419,7 +470,89 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
             });
         }
 
+        if (TryResolveHierarchyContextAtPosition(fullPath, line, out string contextLabel))
+        {
+            AssetEntryDto? entry = _store.GetAssetByPath(fullPath);
+            string relativePath = entry is not null && !string.IsNullOrWhiteSpace(entry.RelativePath)
+                ? entry.RelativePath
+                : fullPath;
+            string kind = entry?.Kind.ToString()
+                ?? (fullPath.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)
+                    ? nameof(AssetKind.Scene)
+                    : nameof(AssetKind.Prefab));
+
+            string markdown = $"""
+                **{contextLabel}** (`{kind}`)
+
+                - Source: `{relativePath}`
+                """;
+
+            return Task.FromResult<AssetHoverDto?>(new AssetHoverDto
+            {
+                Markdown = markdown,
+                TargetFullPath = fullPath,
+            });
+        }
+
         return Task.FromResult<AssetHoverDto?>(null);
+    }
+
+    private static bool TryResolveHierarchyContextAtPosition(string fullPath, int targetLine, out string label)
+    {
+        label = string.Empty;
+        string[]? lines = TryReadAllLines(fullPath);
+        if (lines is null || lines.Length == 0 || (uint)targetLine >= (uint)lines.Length ||
+            !lines[0].StartsWith("%YAML", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        int currentClassId = 0;
+        bool isStripped = false;
+        bool typeHeaderPending = false;
+
+        for (int i = 0; i <= targetLine; i++)
+        {
+            string text = lines[i];
+            if (text.StartsWith("--- !u!", StringComparison.Ordinal))
+            {
+                byte[] headerBytes = Encoding.UTF8.GetBytes(text);
+                UnityYamlSpanReader.TryParseDocumentHeader(headerBytes, out currentClassId, out _, out isStripped);
+                typeHeaderPending = !isStripped;
+                continue;
+            }
+
+            if (isStripped)
+            {
+                continue;
+            }
+
+            if (typeHeaderPending && text.Length > 0 && !char.IsWhiteSpace(text[0]))
+            {
+                typeHeaderPending = false;
+                int colon = text.IndexOf(':');
+                if (i == targetLine && colon > 0)
+                {
+                    label = $"Component: {text[..colon].Trim()}";
+                    return true;
+                }
+
+                continue;
+            }
+
+            if (currentClassId == ClassIdGameObject &&
+                text.TrimStart().StartsWith("m_Name:", StringComparison.Ordinal))
+            {
+                string name = text.TrimStart()["m_Name:".Length..].Trim();
+                if (i == targetLine && name.Length > 0)
+                {
+                    label = $"GameObject: {name}";
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     public Task<AssetLocationDto?> GetDefinitionAsync(string assetPath, int line, int character, CancellationToken ct = default)
@@ -490,12 +623,19 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
             return Task.FromResult(Array.Empty<AssetHierarchyNodeDto>());
         }
 
+        long cacheVersion = _hierarchyCache.Version;
+        if (_hierarchyCache.TryGet(fullPath, maxDepth, includeSerializedValues, out AssetHierarchyNodeDto[]? cached))
+        {
+            return Task.FromResult(cached!);
+        }
+
         AssetHierarchyNodeDto[] hierarchy = HierarchyBuilder.BuildHierarchy(
             fullPath,
             maxDepth,
             includeSerializedValues,
             ResolveHierarchyAsset);
 
+        _hierarchyCache.Set(fullPath, maxDepth, includeSerializedValues, hierarchy, cacheVersion);
         return Task.FromResult(hierarchy);
     }
 
@@ -521,12 +661,14 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
         string[]? lines = TryReadAllLines(fullPath);
         AssetEntryDto? entry = _store.GetAssetByPath(fullPath);
         var diagnostics = new List<AssetDiagnosticDto>();
+        var reportedScriptGuids = new HashSet<AssetGuid>();
 
         if (entry is not null)
         {
             MissingScriptAttachment[] missing = _store.GetMissingScriptAttachments(entry.AssetId);
             foreach (MissingScriptAttachment item in missing)
             {
+                reportedScriptGuids.Add(item.ScriptGuid);
                 diagnostics.Add(CreateMissingScriptDiagnostic(
                     item.ScriptGuid,
                     item.GameObjectName,
@@ -543,6 +685,7 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
                 {
                     if (!att.ScriptGuid.IsZero && ResolveAssetByGuid(att.ScriptGuid) is null)
                     {
+                        reportedScriptGuids.Add(att.ScriptGuid);
                         diagnostics.Add(CreateMissingScriptDiagnostic(
                             att.ScriptGuid,
                             att.GameObjectName,
@@ -553,7 +696,67 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
             }
         }
 
+        foreach (ScannedGuidOccurrence occurrence in FastUnityYamlScanner.ScanGuidOccurrences(fullPath))
+        {
+            if (reportedScriptGuids.Contains(occurrence.Guid) ||
+                ResolveAssetByGuid(occurrence.Guid) is not null ||
+                _packageCacheGuidIndex.Contains(occurrence.Guid))
+            {
+                continue;
+            }
+
+            diagnostics.Add(CreateDanglingReferenceDiagnostic(occurrence, lines));
+        }
+
+        AddPrefabOverrideDiagnostics(entry, fullPath, lines, diagnostics);
+
         return Task.FromResult(diagnostics.ToArray());
+    }
+
+    private void AddPrefabOverrideDiagnostics(
+        AssetEntryDto? entry,
+        string fullPath,
+        string[]? lines,
+        List<AssetDiagnosticDto> diagnostics)
+    {
+        IEnumerable<PrefabOverrideModification> modifications = entry is not null
+            ? _store.GetPrefabModificationsForAsset(entry.AssetId)
+            : FastUnityYamlScanner.ScanFile(fullPath).PrefabModifications.Select(m =>
+                new PrefabOverrideModification(
+                    0,
+                    m.PrefabInstanceFileId,
+                    m.TargetGuid,
+                    m.TargetFileId,
+                    m.RootFieldName,
+                    m.PropertyPath,
+                    m.LineNumber,
+                    string.Empty));
+
+        string? owningSceneName = null;
+        if (entry is not null && entry.Kind == AssetKind.Scene && !string.IsNullOrWhiteSpace(entry.RelativePath))
+        {
+            owningSceneName = Path.GetFileName(entry.RelativePath);
+        }
+        else if (entry is null && fullPath.EndsWith(".unity", StringComparison.OrdinalIgnoreCase))
+        {
+            owningSceneName = Path.GetFileName(fullPath);
+        }
+
+        foreach (PrefabOverrideModification mod in modifications)
+        {
+            AssetEntryDto? basePrefab = ResolveAssetByGuid(mod.TargetGuid);
+            if (basePrefab is null || basePrefab.Kind != AssetKind.Prefab)
+            {
+                continue;
+            }
+
+            diagnostics.Add(CreatePrefabOverrideDiagnostic(
+                Path.GetFileName(basePrefab.RelativePath),
+                owningSceneName,
+                mod.PropertyPath,
+                mod.LineNumber,
+                lines));
+        }
     }
 
     public Task<bool> IsMethodReferencedByUnityEventAsync(string scriptGuid, string methodName, CancellationToken ct = default)
@@ -580,6 +783,7 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
             ThrowIfDisposed();
             _state = "Indexing";
             await _store.SyncWorkspaceAsync(ct).ConfigureAwait(false);
+            _hierarchyCache.Clear();
             _state = "Ready";
         }
         finally
@@ -606,7 +810,14 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
         }
 
         _disposed = true;
+        if (_watcher is not null)
+        {
+            _watcher.BatchProcessed -= OnWatcherBatchProcessed;
+            _watcher.FullRescanProcessed -= OnWatcherFullRescanProcessed;
+        }
+
         _watcher?.Dispose();
+        _hierarchyCache.Clear();
         _store.Dispose();
         _syncLock.Dispose();
     }
@@ -1180,6 +1391,75 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
         {
             Code = "UNITY0001",
             Message = message,
+            Line = lineNumber,
+            StartCharacter = startChar,
+            EndCharacter = endChar,
+        };
+    }
+
+    private static AssetDiagnosticDto CreateDanglingReferenceDiagnostic(
+        ScannedGuidOccurrence occurrence,
+        string[]? lines)
+    {
+        string guidHex = occurrence.Guid.ToHexString();
+        string fieldName = string.Empty;
+
+        if (lines is not null && (uint)occurrence.Line < (uint)lines.Length)
+        {
+            string lineText = lines[occurrence.Line];
+            int colon = lineText.IndexOf(':');
+            if (colon > 0)
+            {
+                fieldName = lineText[..colon].Trim().TrimStart('-').Trim();
+            }
+        }
+
+        string targetKind = fieldName.Contains("SourcePrefab", StringComparison.OrdinalIgnoreCase)
+            ? "Missing prefab reference"
+            : "Dangling asset reference";
+        string message = string.IsNullOrEmpty(fieldName)
+            ? $"{targetKind} (GUID: {guidHex})."
+            : $"{targetKind} on '{fieldName}' (GUID: {guidHex}).";
+
+        return new AssetDiagnosticDto
+        {
+            Code = "UNITY0002",
+            Message = message,
+            Line = occurrence.Line,
+            StartCharacter = occurrence.StartCharacter,
+            EndCharacter = occurrence.EndCharacter,
+        };
+    }
+
+    private static AssetDiagnosticDto CreatePrefabOverrideDiagnostic(
+        string basePrefabFileName,
+        string? owningSceneName,
+        string propertyPath,
+        int lineNumber,
+        string[]? lines)
+    {
+        int startChar = 0;
+        int endChar = 0;
+
+        if (lines is not null && (uint)lineNumber < (uint)lines.Length)
+        {
+            string lineText = lines[lineNumber];
+            int pathIdx = lineText.IndexOf(propertyPath, StringComparison.Ordinal);
+            if (pathIdx >= 0)
+            {
+                startChar = pathIdx;
+                endChar = pathIdx + propertyPath.Length;
+            }
+            else
+            {
+                endChar = lineText.Length;
+            }
+        }
+
+        return new AssetDiagnosticDto
+        {
+            Code = "UNITY0003",
+            Message = $"This value overrides {basePrefabFileName}{(owningSceneName is null ? string.Empty : $" in {owningSceneName}")}; changes to the base prefab will not affect this instance.",
             Line = lineNumber,
             StartCharacter = startChar,
             EndCharacter = endChar,

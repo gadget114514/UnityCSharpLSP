@@ -224,6 +224,46 @@ public sealed class AssetYamlNavigationAndSymbolsTests
     }
 
     [Fact]
+    public async Task Hover_OnSceneGameObjectAndComponent_IncludesSourcePath()
+    {
+        var (server, client, dummyPath) = await CreateInitializedSessionAsync();
+        try
+        {
+            var mainScenePath = Path.Combine(dummyPath, "Assets", "Scenes", "MainScene.unity");
+
+            var gameObjectHover = await client.InvokeWithParameterObjectAsync<Hover?>(
+                Methods.TextDocumentHoverName,
+                new TextDocumentPositionParams
+                {
+                    TextDocument = new TextDocumentIdentifier { Uri = new Uri(mainScenePath) },
+                    Position = new Position(12, 12),
+                });
+
+            Assert.NotNull(gameObjectHover);
+            var gameObjectMarkdown = GetHoverMarkdown(gameObjectHover!);
+            Assert.Contains("GameObject: GameManager", gameObjectMarkdown);
+            Assert.Contains("Assets/Scenes/MainScene.unity", gameObjectMarkdown);
+
+            var componentHover = await client.InvokeWithParameterObjectAsync<Hover?>(
+                Methods.TextDocumentHoverName,
+                new TextDocumentPositionParams
+                {
+                    TextDocument = new TextDocumentIdentifier { Uri = new Uri(mainScenePath) },
+                    Position = new Position(19, 2),
+                });
+
+            Assert.NotNull(componentHover);
+            var componentMarkdown = GetHoverMarkdown(componentHover!);
+            Assert.Contains("Component: Transform", componentMarkdown);
+            Assert.Contains("Assets/Scenes/MainScene.unity", componentMarkdown);
+        }
+        finally
+        {
+            await ShutdownAsync(server, client);
+        }
+    }
+
+    [Fact]
     public async Task DocumentSymbol_OnPrefabAndScene_ReturnsHierarchyTree()
     {
         var (server, client, dummyPath) = await CreateInitializedSessionAsync();
@@ -369,6 +409,196 @@ public sealed class AssetYamlNavigationAndSymbolsTests
                 Assert.Equal("UNITY0001", pushedDiag.Code?.Value);
                 Assert.Equal(DiagnosticSeverity.Warning, pushedDiag.Severity);
                 Assert.Null(server.WorkspaceManager!.GetDocument(brokenPrefabPath));
+            }
+            finally
+            {
+                await ShutdownAsync(server, client);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                try
+                {
+                    Directory.Delete(tempRoot, recursive: true);
+                }
+                catch
+                {
+                    // Ignore transient SQLite file handles during temp cleanup
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Diagnostics_PrefabOverrideImpact_IsOptInForPullAndPush()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "UnityCSharpLSP.PrefabOverrideDiagTests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var prefabsDir = Path.Combine(tempRoot, "Assets", "Prefabs");
+            Directory.CreateDirectory(prefabsDir);
+
+            const string baseGuid = "bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc";
+            var basePrefabPath = Path.Combine(prefabsDir, "Base.prefab");
+            await File.WriteAllTextAsync(basePrefabPath, string.Join("\n",
+            [
+                "%YAML 1.1",
+                "%TAG !u! tag:unity3d.com,2011:",
+                "--- !u!114 &100014",
+                "MonoBehaviour:",
+                "  config: 1",
+            ]));
+            await File.WriteAllTextAsync(basePrefabPath + ".meta", $"fileFormatVersion: 2\nguid: {baseGuid}\n");
+
+            var variantPath = Path.Combine(prefabsDir, "Variant.prefab");
+            var variantText = string.Join("\n",
+            [
+                "%YAML 1.1",
+                "%TAG !u! tag:unity3d.com,2011:",
+                "--- !u!1001 &300000",
+                "PrefabInstance:",
+                "  m_Modification:",
+                "    m_Modifications:",
+                $"    - target: {{fileID: 100014, guid: {baseGuid}, type: 3}}",
+                "      propertyPath: config",
+                "      value: 42",
+            ]);
+            await File.WriteAllTextAsync(variantPath, variantText);
+            await File.WriteAllTextAsync(variantPath + ".meta", "fileFormatVersion: 2\nguid: cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\n");
+
+            var collector = new DiagnosticsCollector();
+            var (server, client, _) = await CreateInitializedSessionAsync(rootOverride: tempRoot, clientCallbackTarget: collector);
+            try
+            {
+                var variantUri = new Uri(variantPath);
+                var pullParams = new DocumentDiagnosticParams
+                {
+                    TextDocument = new TextDocumentIdentifier { Uri = variantUri },
+                };
+
+                // Default (opt-out): neither pull nor push reports UNITY0003.
+                var before = await client.InvokeWithParameterObjectAsync<DocumentDiagnosticReport>(DiagnosticMethods.Name, pullParams);
+                Assert.NotNull(before.Diagnostics);
+                Assert.DoesNotContain(before.Diagnostics!, d => string.Equals(d.Code?.Value as string, "UNITY0003", StringComparison.Ordinal));
+
+                await client.NotifyWithParameterObjectAsync(
+                    Methods.TextDocumentDidOpenName,
+                    new DidOpenTextDocumentParams
+                    {
+                        TextDocument = new TextDocumentItem
+                        {
+                            Uri = variantUri,
+                            LanguageId = "yaml",
+                            Version = 1,
+                            Text = variantText,
+                        },
+                    });
+                var beforePush = await collector.WaitForAsync(variantUri);
+                Assert.DoesNotContain(beforePush.Diagnostics, d => string.Equals(d.Code?.Value as string, "UNITY0003", StringComparison.Ordinal));
+
+                // Opt in (camelCase): pull reports UNITY0003 at the propertyPath line.
+                await client.NotifyWithParameterObjectAsync(
+                    Methods.WorkspaceDidChangeConfigurationName,
+                    new { settings = new { reportPrefabOverrideImpact = true } });
+                var after = await client.InvokeWithParameterObjectAsync<DocumentDiagnosticReport>(DiagnosticMethods.Name, pullParams);
+                var diag = Assert.Single(after.Diagnostics!, d => string.Equals(d.Code?.Value as string, "UNITY0003", StringComparison.Ordinal));
+                Assert.Equal(7, diag.Range.Start.Line);
+                Assert.Contains("Base.prefab", diag.Message);
+
+                // Push after opt-in (didSave re-publishes for YAML assets).
+                await client.NotifyWithParameterObjectAsync(
+                    Methods.TextDocumentDidSaveName,
+                    new DidSaveTextDocumentParams { TextDocument = new TextDocumentIdentifier { Uri = variantUri } });
+                var afterPush = await collector.WaitForAsync(variantUri);
+                Assert.Contains(afterPush.Diagnostics, d => string.Equals(d.Code?.Value as string, "UNITY0003", StringComparison.Ordinal));
+
+                // Opt out via snake_case: pull hides UNITY0003 again.
+                await client.NotifyWithParameterObjectAsync(
+                    Methods.WorkspaceDidChangeConfigurationName,
+                    new { settings = new { report_prefab_override_impact = false } });
+                var afterOptOut = await client.InvokeWithParameterObjectAsync<DocumentDiagnosticReport>(DiagnosticMethods.Name, pullParams);
+                Assert.DoesNotContain(afterOptOut.Diagnostics!, d => string.Equals(d.Code?.Value as string, "UNITY0003", StringComparison.Ordinal));
+            }
+            finally
+            {
+                await ShutdownAsync(server, client);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                try
+                {
+                    Directory.Delete(tempRoot, recursive: true);
+                }
+                catch
+                {
+                    // Ignore transient SQLite file handles during temp cleanup
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Diagnostics_ScenePrefabOverride_IsOptInAndNamesScene()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "UnityCSharpLSP.SceneOverrideDiagTests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var prefabsDir = Path.Combine(tempRoot, "Assets", "Prefabs");
+            var scenesDir = Path.Combine(tempRoot, "Assets", "Scenes");
+            Directory.CreateDirectory(prefabsDir);
+            Directory.CreateDirectory(scenesDir);
+
+            const string baseGuid = "bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc";
+            var basePrefabPath = Path.Combine(prefabsDir, "Base.prefab");
+            await File.WriteAllTextAsync(basePrefabPath, string.Join("\n",
+            [
+                "%YAML 1.1",
+                "%TAG !u! tag:unity3d.com,2011:",
+                "--- !u!114 &100014",
+                "MonoBehaviour:",
+                "  config: 1",
+            ]));
+            await File.WriteAllTextAsync(basePrefabPath + ".meta", $"fileFormatVersion: 2\nguid: {baseGuid}\n");
+
+            var scenePath = Path.Combine(scenesDir, "MainScene.unity");
+            await File.WriteAllTextAsync(scenePath, string.Join("\n",
+            [
+                "%YAML 1.1",
+                "%TAG !u! tag:unity3d.com,2011:",
+                "--- !u!1001 &300000",
+                "PrefabInstance:",
+                "  m_Modification:",
+                "    m_Modifications:",
+                $"    - target: {{fileID: 100014, guid: {baseGuid}, type: 3}}",
+                "      propertyPath: config",
+                "      value: 42",
+            ]));
+            await File.WriteAllTextAsync(scenePath + ".meta", "fileFormatVersion: 2\nguid: e1f2a3b4c5d64758697a8b9c0d1e2f40\n");
+
+            var (server, client, _) = await CreateInitializedSessionAsync(rootOverride: tempRoot);
+            try
+            {
+                var pullParams = new DocumentDiagnosticParams
+                {
+                    TextDocument = new TextDocumentIdentifier { Uri = new Uri(scenePath) },
+                };
+
+                var before = await client.InvokeWithParameterObjectAsync<DocumentDiagnosticReport>(DiagnosticMethods.Name, pullParams);
+                Assert.DoesNotContain(before.Diagnostics!, d => string.Equals(d.Code?.Value as string, "UNITY0003", StringComparison.Ordinal));
+
+                await client.NotifyWithParameterObjectAsync(
+                    Methods.WorkspaceDidChangeConfigurationName,
+                    new { settings = new { reportPrefabOverrideImpact = true } });
+
+                var after = await client.InvokeWithParameterObjectAsync<DocumentDiagnosticReport>(DiagnosticMethods.Name, pullParams);
+                var diag = Assert.Single(after.Diagnostics!, d => string.Equals(d.Code?.Value as string, "UNITY0003", StringComparison.Ordinal));
+                Assert.Equal(7, diag.Range.Start.Line);
+                Assert.Contains("Base.prefab in MainScene.unity", diag.Message);
             }
             finally
             {

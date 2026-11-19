@@ -374,7 +374,8 @@ sequenceDiagram
 | `textDocument/documentSymbol` | `GetHierarchyAsync` を呼び出し、対象ファイルのみオンデマンドで `GameObject` (`!u!1`) / `Transform` (`!u!4`, `!u!224`) / `SceneRoots` (`!u!1660057539`) を走査し、UnityのHierarchy順のツリーとアタッチ済みC#スクリプト名をアウトライン表示。 |
 | `textDocument/documentLink` / `definition` | YAML内の `guid: <32hex>` を検出し、`assets` テーブルから `m_Script` なら対応する `.cs` ファイルへ、`m_SourcePrefab` や外部アセット参照なら対象 `.prefab` / アセットファイルへのリンク・定義ジャンプを提供。 |
 | `textDocument/hover` | ・`guid:` 上: アセットパス、種別、`MonoScript` ならC#クラスの完全修飾名とXMLドキュメントコメントを表示。<br>・シリアライズフィールド行 / `propertyPath` 行: 対応するC#フィールドの型・`[Tooltip("...")]`・`[Range]` 等の属性情報を表示。 |
-| `textDocument/publishDiagnostics` | ・**Missing Script (`UNITY0001`)**: `script_attachments.script_guid` が `assets` テーブルに存在しない場合に警告。<br>・**Orphaned Property (`UNITY0002`)**: `serialized_fields.field_name` が対応するC#クラス（および `[FormerlySerializedAs]`）に存在しない場合にヒント/警告を表示。 |
+| `textDocument/completion` | YAMLの `guid:` 行でインデックス済みアセットを名前補完し、選択時にGUIDを挿入。`m_Script` 行はスクリプト、`m_SourcePrefab` 行はPrefab、それ以外は全アセットが候補。 |
+| `textDocument/publishDiagnostics` | ・**Missing Script (`UNITY0001`)**: `script_attachments.script_guid` が `assets` テーブルに存在しない場合に警告。<br>・**Dangling Asset Reference (`UNITY0002`, オプトイン)**: 解決できない `guid:` 参照（削除されたPrefab/アセット等）を警告。`reportDanglingAssetReferences` が `true` のときのみ公開。 |
 
 ### 6.3 AI エージェント向けカスタムコマンド (`workspace/executeCommand` & CLI)
 

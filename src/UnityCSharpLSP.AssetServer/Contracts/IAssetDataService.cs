@@ -16,6 +16,9 @@ public interface IAssetDataService
     [JsonRpcMethod("assetd/getAssetByPath")]
     Task<AssetEntryDto?> GetAssetByPathAsync(string filePath, CancellationToken ct = default);
 
+    [JsonRpcMethod("assetd/getAssets")]
+    Task<AssetEntryDto[]> GetAssetsAsync(AssetKind? kind, CancellationToken ct = default);
+
     [JsonRpcMethod("assetd/getScriptReferenceCounts")]
     Task<ScriptReferenceCountDto[]> GetScriptReferenceCountsAsync(string[] scriptGuids, CancellationToken ct = default);
 

@@ -52,7 +52,15 @@ public sealed class PullDiagnosticsHandler
         }
 
         var text = await document.GetTextAsync(ct).ConfigureAwait(false);
-        var resultId = ComputeResultId(filePath, ws.GetDocumentVersion(filePath), text.ToString());
+        var diagnosticsHandler = _diagnosticsHandlerProvider();
+        var diagnostics = diagnosticsHandler is not null
+            ? await diagnosticsHandler.GetLspDiagnosticsAsync(filePath, ct).ConfigureAwait(false)
+            : [];
+
+        var resultId = ComputeResultId(
+            filePath,
+            ws.GetDocumentVersion(filePath),
+            $"{text}\n{ComputeUnityDiagnosticKey(diagnostics)}");
         var previousResultId = ToResultId(@params.PreviousResultId);
 
         if (previousResultId is not null && string.Equals(previousResultId, resultId, StringComparison.Ordinal))
@@ -63,11 +71,6 @@ public sealed class PullDiagnosticsHandler
                 ResultId = resultId,
             };
         }
-
-        var diagnosticsHandler = _diagnosticsHandlerProvider();
-        var diagnostics = diagnosticsHandler is not null
-            ? await diagnosticsHandler.GetLspDiagnosticsAsync(filePath, ct).ConfigureAwait(false)
-            : [];
 
         return new DocumentDiagnosticReport
         {
@@ -88,7 +91,7 @@ public sealed class PullDiagnosticsHandler
             : [];
 
         var content = await TryReadFileTextAsync(filePath, ct).ConfigureAwait(false);
-        var diagKey = string.Join(";", diagnostics.Select(d => $"{d.Code?.Value}:{d.Range.Start.Line}:{d.Message}"));
+        var diagKey = ComputeUnityDiagnosticKey(diagnostics);
         var resultId = ComputeResultId(filePath, version: null, $"{content}\n{diagKey}");
         var previousResultId = ToResultId(previousResultIdObj);
 
@@ -136,6 +139,28 @@ public sealed class PullDiagnosticsHandler
             JToken token => token.Value<string>(),
             _ => null,
         };
+    }
+
+    /// <summary>
+    /// Builds a stable signature of the Unity-specific diagnostics (UNITY0001 - UNITY0004).
+    /// Including it in the result id makes pull diagnostics report <c>unchanged</c> only when
+    /// both the document content and the Unity diagnostics are identical, while still detecting
+    /// option or asset-index changes that do not touch the document text.
+    /// </summary>
+    internal static string ComputeUnityDiagnosticKey(IEnumerable<Diagnostic> diagnostics)
+    {
+        return string.Join(";", diagnostics
+            .Where(d => d.Code?.Value?.ToString() is string code &&
+                        code.StartsWith("UNITY", StringComparison.Ordinal))
+            .Select(d => string.Join(":",
+                d.Code?.Value?.ToString(),
+                d.Range.Start.Line,
+                d.Range.Start.Character,
+                d.Range.End.Line,
+                d.Range.End.Character,
+                d.Severity,
+                d.Message))
+            .OrderBy(key => key, StringComparer.Ordinal));
     }
 
     internal static string ComputeResultId(string filePath, int? version, string content)

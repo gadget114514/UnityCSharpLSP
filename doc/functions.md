@@ -99,7 +99,7 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 | `textDocument/documentLink` | C# コメント・文字列リテラル内のファイルパス、C# 内の `SceneManager.LoadScene` / `LoadSceneAsync` シーン名、および `.prefab` / `.unity` / `.asset` 内の `guid:` 参照をリンク | `DocumentLinkHandler.cs` |
 | `textDocument/linkedEditingRange` | `#if` / `#elif` / `#define` / `#undef` のシンボル、`#region` / `#endregion` のラベルを連動編集 | `LinkedEditingRangeHandler.cs` |
 | `textDocument/inlineValue` | 定数評価可能なローカル・フィールドに `= <value>` をインライン表示（LSP 3.17） | `InlineValueHandler.cs` |
-| `textDocument/diagnostic` | pull 型診断。C# 診断に加え `.prefab` / `.unity` / `.asset` の Missing Script (`UNITY0001`) を報告。`resultId` が一致すれば `unchanged` を返す | `PullDiagnosticsHandler.cs` |
+| `textDocument/diagnostic` | pull 型診断。C# 診断に加え `.prefab` / `.unity` / `.asset` の Missing Script (`UNITY0001`)、opt-in の Dangling Asset Reference (`UNITY0002`)、opt-in の Prefab Override Impact (`UNITY0003`)、opt-in の Unattached Script (`UNITY0004`、`Hint`) を報告。`resultId` が一致すれば `unchanged` を返す | `PullDiagnosticsHandler.cs` |
 | `workspaceSymbol/resolve` | `workspace/symbol` が返したシンボルの `data` から `containerName` / `detail` / `kind` を遅延補完（カスタムメソッド） | `WorkspaceSymbolHandler.cs` |
 
 ### クライアント機能交渉
@@ -136,7 +136,7 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 | `workspace/diagnostic` | request | pull 型のワークスペース診断。全ドキュメントのレポートを `resultId` 付きで返し、`previousResultIds` が一致すれば `unchanged` を返す（部分結果トークンにも対応） |
 | `workspaceSymbol/resolve` | request | シンボルの `data` から詳細情報を補完（カスタムメソッド） |
 | `workspace/executeCommand` | request | カスタムコマンドを実行（下記一覧を参照） |
-| `workspace/didChangeConfiguration` | notification | 設定を typed object に保持。`enableDiagnostics` で push 診断の有効/無効を切り替え、`predefinedSymbols` も保持 |
+| `workspace/didChangeConfiguration` | notification | 設定を typed object に保持。`enableDiagnostics` で push 診断の有効/無効を切り替え、`predefinedSymbols`、`propagateRenamesToAssets`、`reportDanglingAssetReferences`、`reportPrefabOverrideImpact`、`reportUnattachedScripts` を保持（snake_case エイリアスも可） |
 | `workspace/didChangeWatchedFiles` | notification | `.cs` ファイルの作成・変更・削除を検出し、Roslyn コンパイルへ反映 |
 | `workspace/willRenameFiles` | request | 旧ファイル名と同名の型を Roslyn `Renamer` で新ファイル名へリネームし、ソリューション全体の `TextEdit[]` を `WorkspaceEdit.Changes` で返す |
 | `workspace/didRenameFiles` | notification | リネーム後のドキュメントパスを更新（旧パス削除・新パス追加） |
@@ -165,7 +165,7 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 
 | メソッド | 説明 |
 | :--- | :--- |
-| `textDocument/publishDiagnostics` | Roslyn コンパイラ診断と `.prefab` / `.unity` / `.asset` の Missing Script 診断 (`UNITY0001`) を公開。`[SerializeField]` の `CS0649` と `UnityEvent` 参照メソッドの `IDE0051` は抑制 |
+| `textDocument/publishDiagnostics` | Roslyn コンパイラ診断と `.prefab` / `.unity` / `.asset` の Missing Script 診断 (`UNITY0001`) に加え、opt-in の `UNITY0002` / `UNITY0003` と C# 側の opt-in `UNITY0004` (`Hint`) を公開。`[SerializeField]` の `CS0649` と `UnityEvent` 参照メソッドの `IDE0051` は抑制 |
 | `$/progress` | `workspace/symbol` の部分結果を 100 件ずつ `SymbolInformation[]` で通知。長時間コマンドの work-done 進捗（`workDoneToken` 指定時）にも対応 |
 | `window/showMessage` | `unitycsharp.showWorkspaceInfo` の結果を情報メッセージで通知 |
 
@@ -181,8 +181,9 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 | UPM パッケージ解決 | `Packages/manifest.json` と `packages-lock.json`、`Library/PackageCache` を解析 |
 | プリプロセッサシンボル | Unity バージョン・プラットフォーム・パッケージに応じたシンボルを自動定義 |
 | 診断サプレッサー | `[SerializeField]` フィールドの `CS0649` および `UnityEvent` 参照メソッドの `IDE0051` 誤警告を抑制 |
+| 未アタッチスクリプト診断 | opt-in (`reportUnattachedScripts`、既定 `false`) で、具象 `MonoBehaviour` / `ScriptableObject` のうち prefab / scene に一度もアタッチされない型へ C# 宣言上に `UNITY0004` (`Hint`) を報告。abstract / interface / ジェネリック / エディタ限定クラスは対象外 |
 | MonoBehaviour 補完 | Unity メッセージメソッドのスニペット補完 |
-| Prefab / Scene 双方向 LSP | 常駐 Asset Data Daemon (`--asset-daemon`) と SQLite WAL+mmap (`Library/UnityCSharpLSP/asset-db.sqlite`) + オンメモリグラフにより、Prefab/Variant/Scene 間の参照検索・CodeLens・リネーム伝播・YAML ナビゲーション・Missing Script 診断・`SceneManager.LoadScene` 補完/ジャンプを提供 |
+| Prefab / Scene 双方向 LSP | 常駐 Asset Data Daemon (`--asset-daemon`) と SQLite WAL+mmap (`Library/UnityCSharpLSP/asset-db.sqlite`) + オンメモリグラフにより、Prefab/Variant/Scene 間の参照検索・CodeLens・リネーム伝播・YAML ナビゲーション・Missing Script 診断・opt-in の Prefab Override Impact 診断・`SceneManager.LoadScene` 補完/ジャンプを提供 |
 | 動的ファイル監視 | Unity Editor を開かなくても新規・削除 `.cs` および `.prefab` / `.unity` / `.asset` / `.meta` を即時反映 |
 | `.csproj` / `.sln` 不要 | Unity が生成するプロジェクトファイルに依存せず、直接 Roslyn ワークスペースを構築 |
 | Nullable | Unity デフォルトに合わせて無効 (`NullableContextOptions.Disable`) |

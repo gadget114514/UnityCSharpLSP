@@ -17,6 +17,15 @@ public sealed class WorkspaceSettings
     [JsonProperty("propagateRenamesToAssets")]
     public bool PropagateRenamesToAssets { get; set; } = false;
 
+    [JsonProperty("reportDanglingAssetReferences")]
+    public bool ReportDanglingAssetReferences { get; set; } = false;
+
+    [JsonProperty("reportPrefabOverrideImpact")]
+    public bool ReportPrefabOverrideImpact { get; set; } = false;
+
+    [JsonProperty("reportUnattachedScripts")]
+    public bool ReportUnattachedScripts { get; set; } = false;
+
     public static WorkspaceSettings From(JToken? settings)
     {
         if (settings is null)
@@ -51,6 +60,24 @@ public sealed class WorkspaceSettings
         if (propagate is not null && propagate.Type != JTokenType.Null)
         {
             result.PropagateRenamesToAssets = propagate.Value<bool>();
+        }
+
+        var dangling = obj["reportDanglingAssetReferences"] ?? obj["report_dangling_asset_references"];
+        if (dangling is not null && dangling.Type != JTokenType.Null)
+        {
+            result.ReportDanglingAssetReferences = dangling.Value<bool>();
+        }
+
+        var overrideImpact = obj["reportPrefabOverrideImpact"] ?? obj["report_prefab_override_impact"];
+        if (overrideImpact is not null && overrideImpact.Type != JTokenType.Null)
+        {
+            result.ReportPrefabOverrideImpact = overrideImpact.Value<bool>();
+        }
+
+        var unattached = obj["reportUnattachedScripts"] ?? obj["report_unattached_scripts"];
+        if (unattached is not null && unattached.Type != JTokenType.Null)
+        {
+            result.ReportUnattachedScripts = unattached.Value<bool>();
         }
 
         return result;
