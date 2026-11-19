@@ -33,6 +33,7 @@ public sealed class AssetFileWatcher : IDisposable
         ".prefab",
         ".unity",
         ".asset",
+        ".mat",
     ];
 
     private readonly AssetSqliteStore _store;
@@ -113,6 +114,7 @@ public sealed class AssetFileWatcher : IDisposable
             watcher.Filters.Add("*.prefab");
             watcher.Filters.Add("*.unity");
             watcher.Filters.Add("*.asset");
+            watcher.Filters.Add("*.mat");
 
             watcher.Created += OnChanged;
             watcher.Changed += OnChanged;

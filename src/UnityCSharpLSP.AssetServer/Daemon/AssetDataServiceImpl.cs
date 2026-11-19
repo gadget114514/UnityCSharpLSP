@@ -479,7 +479,9 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
             string kind = entry?.Kind.ToString()
                 ?? (fullPath.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)
                     ? nameof(AssetKind.Scene)
-                    : nameof(AssetKind.Prefab));
+                    : fullPath.EndsWith(".mat", StringComparison.OrdinalIgnoreCase)
+                        ? nameof(AssetKind.Material)
+                        : nameof(AssetKind.Prefab));
 
             string markdown = $"""
                 **{contextLabel}** (`{kind}`)

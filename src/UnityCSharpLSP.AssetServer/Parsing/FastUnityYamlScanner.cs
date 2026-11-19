@@ -78,7 +78,7 @@ public sealed record ScannedGuidOccurrence(
     AssetGuid Guid);
 
 /// <summary>
-/// Zero-allocation-oriented single-pass UTF-8 scanner for Unity YAML files (<c>.prefab</c>, <c>.unity</c>, <c>.asset</c>).
+/// Zero-allocation-oriented single-pass UTF-8 scanner for Unity YAML files (<c>.prefab</c>, <c>.unity</c>, <c>.asset</c>, <c>.mat</c>).
 /// </summary>
 public static class FastUnityYamlScanner
 {

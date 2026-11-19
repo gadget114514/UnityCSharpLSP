@@ -326,6 +326,40 @@ public sealed class FastUnityYamlScannerTests
         Assert.Equal("c5c9d31933d241c4b9047a5783f7f380", occ.Guid.ToHexString());
     }
 
+    [Fact]
+    public void ScanGuidOccurrences_MaterialYaml_ReturnsShaderAndTextureGuids()
+    {
+        const string shaderGuid = "c5c9d31933d241c4b9047a5783f7f380";
+        const string textureGuid = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+        string yaml = string.Join("\n",
+        [
+            "%YAML 1.1",
+            "%TAG !u! tag:unity3d.com,2011:",
+            "--- !u!21 &2100000",
+            "Material:",
+            "  m_Name: Lit",
+            $"  m_Shader: {{fileID: 46, guid: {shaderGuid}, type: 3}}",
+            "  m_SavedProperties:",
+            "    m_TexEnvs:",
+            $"      _BaseMap: {{fileID: 2800000, guid: {textureGuid}, type: 3}}",
+        ]);
+
+        List<ScannedGuidOccurrence> occurrences = FastUnityYamlScanner.ScanGuidOccurrences(Encoding.UTF8.GetBytes(yaml));
+
+        Assert.Collection(
+            occurrences,
+            shader =>
+            {
+                Assert.Equal(5, shader.Line);
+                Assert.Equal(shaderGuid, shader.Guid.ToHexString());
+            },
+            texture =>
+            {
+                Assert.Equal(8, texture.Line);
+                Assert.Equal(textureGuid, texture.Guid.ToHexString());
+            });
+    }
+
     private static string GetDummyAssetPath(string relativePath)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

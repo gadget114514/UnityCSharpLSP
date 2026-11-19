@@ -10,6 +10,7 @@ public enum AssetKind : int
     Scene = 3,
     ScriptableObject = 4,
     OtherAsset = 5,
+    Material = 6,
 }
 
 public enum AssetMemberKind : int

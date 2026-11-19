@@ -1,5 +1,5 @@
 #define MyAppName "UnityCSharpLSP"
-#define MyAppVersion "0.4.3"
+#define MyAppVersion "0.4.4"
 #define MyAppPublisher "gadget114514"
 #define MyAppURL "https://github.com/gadget114514/UnityCSharpLSP"
 #define MyAppExeName "UnityCSharpLSP.Server.exe"

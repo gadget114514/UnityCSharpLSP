@@ -24,13 +24,13 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
   "lsp": {
     "unity-csharp-2nek": {
       "command": ["<path/to/UnityCSharpLSP.Server.exe>", "--stdio"],
-      "extensions": [".cs", ".prefab", ".unity", ".asset"]
+      "extensions": [".cs", ".prefab", ".unity", ".asset", ".mat"]
     }
   }
 }
 ```
 
-> C# のみで十分場合は `"extensions": [".cs"]` のままでも動作します。`.prefab` / `.unity` / `.asset` を含めると YAML アセットに対する Hover / Definition / DocumentLink / DocumentSymbol / Diagnostics も有効になります。
+> C# のみで十分場合は `"extensions": [".cs"]` のままでも動作します。`.prefab` / `.unity` / `.asset` / `.mat` を含めると YAML アセットに対する Hover / Definition / DocumentLink / DocumentSymbol / Diagnostics も有効になります。`.mat` では `guid:` 参照（シェーダー・テクスチャ）のナビゲーションと opt-in の `UNITY0002` が利用できます。
 
 ---
 
@@ -64,8 +64,8 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 
 | メソッド | 説明 | 実装 |
 | :--- | :--- | :--- |
-| `textDocument/hover` | C# シンボルのシグネチャと XML `<summary>` を表示。`.prefab` / `.unity` / `.asset` 上では対象アセット/フィールド情報と対応する C# シグネチャ・XML doc・`[Tooltip]` を統合表示 | `HoverHandler.cs` |
-| `textDocument/definition` | 宣言へジャンプ（`.asmdef` 境界を越えた参照解決）。`.prefab` / `.unity` / `.asset` の `guid:` やシリアライズフィールド/`propertyPath` から対象ファイル・C# フィールドへジャンプ。C# 内の `SceneManager.LoadScene("...")` / `LoadSceneAsync("...")` から `.unity` シーンへジャンプ | `DefinitionHandler.cs` |
+| `textDocument/hover` | C# シンボルのシグネチャと XML `<summary>` を表示。`.prefab` / `.unity` / `.asset` 上では対象アセット/フィールド情報と対応する C# シグネチャ・XML doc・`[Tooltip]` を統合表示。`.mat` 上では `guid:` 参照を解決 | `HoverHandler.cs` |
+| `textDocument/definition` | 宣言へジャンプ（`.asmdef` 境界を越えた参照解決）。`.prefab` / `.unity` / `.asset` / `.mat` の `guid:` やシリアライズフィールド/`propertyPath` から対象ファイル・C# フィールドへジャンプ。C# 内の `SceneManager.LoadScene("...")` / `LoadSceneAsync("...")` から `.unity` シーンへジャンプ | `DefinitionHandler.cs` |
 | `textDocument/typeDefinition` | カーソル位置のシンボルの型宣言へジャンプ | `TypeDefinitionHandler.cs` |
 | `textDocument/declaration` | シンボルの宣言（`OriginalDefinition` 含む）へジャンプ | `DeclarationHandler.cs` |
 | `textDocument/references` | ソリューション全体の C# 参照に加え、`MonoBehaviour` / `ScriptableObject` 型・シリアライズフィールド・`UnityEvent` 呼び出しメソッドに対する `.prefab` / `.unity` / `.asset` 内の直接・間接参照を列挙 | `ReferencesHandler.cs` |
@@ -96,10 +96,10 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 | `textDocument/inlayHint` | `var` の推論型ヒント（`: <type>`）と引数のパラメータ名ヒント（LSP 3.17） | `InlayHintHandler.cs` |
 | `textDocument/codeLens` | 型・メソッドの参照カウントレンズ（`MonoBehaviour` / `ScriptableObject` 型では `N references (P prefabs, S scenes)` とアセット参照位置を表示） | `CodeLensHandler.cs` |
 | `codeLens/resolve` | コードレンズの解決（表示コマンドは事前設定） | `CodeLensHandler.cs` |
-| `textDocument/documentLink` | C# コメント・文字列リテラル内のファイルパス、C# 内の `SceneManager.LoadScene` / `LoadSceneAsync` シーン名、および `.prefab` / `.unity` / `.asset` 内の `guid:` 参照をリンク | `DocumentLinkHandler.cs` |
+| `textDocument/documentLink` | C# コメント・文字列リテラル内のファイルパス、C# 内の `SceneManager.LoadScene` / `LoadSceneAsync` シーン名、および `.prefab` / `.unity` / `.asset` / `.mat` 内の `guid:` 参照をリンク | `DocumentLinkHandler.cs` |
 | `textDocument/linkedEditingRange` | `#if` / `#elif` / `#define` / `#undef` のシンボル、`#region` / `#endregion` のラベルを連動編集 | `LinkedEditingRangeHandler.cs` |
 | `textDocument/inlineValue` | 定数評価可能なローカル・フィールドに `= <value>` をインライン表示（LSP 3.17） | `InlineValueHandler.cs` |
-| `textDocument/diagnostic` | pull 型診断。C# 診断に加え `.prefab` / `.unity` / `.asset` の Missing Script (`UNITY0001`)、opt-in の Dangling Asset Reference (`UNITY0002`)、opt-in の Prefab Override Impact (`UNITY0003`)、opt-in の Unattached Script (`UNITY0004`、`Hint`) を報告。`resultId` が一致すれば `unchanged` を返す | `PullDiagnosticsHandler.cs` |
+| `textDocument/diagnostic` | pull 型診断。C# 診断に加え `.prefab` / `.unity` / `.asset` の Missing Script (`UNITY0001`)、opt-in の Dangling Asset Reference (`UNITY0002`、`.mat` も対象)、opt-in の Prefab Override Impact (`UNITY0003`)、opt-in の Unattached Script (`UNITY0004`、`Hint`) を報告。`resultId` が一致すれば `unchanged` を返す | `PullDiagnosticsHandler.cs` |
 | `workspaceSymbol/resolve` | `workspace/symbol` が返したシンボルの `data` から `containerName` / `detail` / `kind` を遅延補完（カスタムメソッド） | `WorkspaceSymbolHandler.cs` |
 
 ### クライアント機能交渉
@@ -165,7 +165,7 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 
 | メソッド | 説明 |
 | :--- | :--- |
-| `textDocument/publishDiagnostics` | Roslyn コンパイラ診断と `.prefab` / `.unity` / `.asset` の Missing Script 診断 (`UNITY0001`) に加え、opt-in の `UNITY0002` / `UNITY0003` と C# 側の opt-in `UNITY0004` (`Hint`) を公開。`[SerializeField]` の `CS0649` と `UnityEvent` 参照メソッドの `IDE0051` は抑制 |
+| `textDocument/publishDiagnostics` | Roslyn コンパイラ診断と `.prefab` / `.unity` / `.asset` の Missing Script 診断 (`UNITY0001`) に加え、opt-in の `UNITY0002`（`.mat` も対象）/ `UNITY0003` と C# 側の opt-in `UNITY0004` (`Hint`) を公開。`[SerializeField]` の `CS0649` と `UnityEvent` 参照メソッドの `IDE0051` は抑制 |
 | `$/progress` | `workspace/symbol` の部分結果を 100 件ずつ `SymbolInformation[]` で通知。長時間コマンドの work-done 進捗（`workDoneToken` 指定時）にも対応 |
 | `window/showMessage` | `unitycsharp.showWorkspaceInfo` の結果を情報メッセージで通知 |
 
@@ -184,7 +184,7 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 | 未アタッチスクリプト診断 | opt-in (`reportUnattachedScripts`、既定 `false`) で、具象 `MonoBehaviour` / `ScriptableObject` のうち prefab / scene に一度もアタッチされない型へ C# 宣言上に `UNITY0004` (`Hint`) を報告。abstract / interface / ジェネリック / エディタ限定クラスは対象外 |
 | MonoBehaviour 補完 | Unity メッセージメソッドのスニペット補完 |
 | Prefab / Scene 双方向 LSP | 常駐 Asset Data Daemon (`--asset-daemon`) と SQLite WAL+mmap (`Library/UnityCSharpLSP/asset-db.sqlite`) + オンメモリグラフにより、Prefab/Variant/Scene 間の参照検索・CodeLens・リネーム伝播・YAML ナビゲーション・Missing Script 診断・opt-in の Prefab Override Impact 診断・`SceneManager.LoadScene` 補完/ジャンプを提供 |
-| 動的ファイル監視 | Unity Editor を開かなくても新規・削除 `.cs` および `.prefab` / `.unity` / `.asset` / `.meta` を即時反映 |
+| 動的ファイル監視 | Unity Editor を開かなくても新規・削除 `.cs` および `.prefab` / `.unity` / `.asset` / `.mat` / `.meta` を即時反映 |
 | `.csproj` / `.sln` 不要 | Unity が生成するプロジェクトファイルに依存せず、直接 Roslyn ワークスペースを構築 |
 | Nullable | Unity デフォルトに合わせて無効 (`NullableContextOptions.Disable`) |
 | マルチルートワークスペース | 複数 `workspaceFolders` を個別の Roslyn ワークスペースとして同時に管理 |

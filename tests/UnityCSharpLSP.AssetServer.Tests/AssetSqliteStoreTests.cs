@@ -350,6 +350,44 @@ public sealed class AssetSqliteStoreTests
         }
     }
 
+    [Fact]
+    public async Task SyncWorkspaceAsync_MaterialFile_IndexedAsMaterial()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string dbPath = Path.Combine(tempDir.Path, "asset-db.sqlite");
+        string projectRoot = tempDir.Path;
+
+        const string materialGuid = "b1b2c3d4e5f60718293a4b5c6d7e8f91";
+        string materialPath = WriteAssetWithMeta(
+            projectRoot,
+            "Assets/Materials/Lit.mat",
+            materialGuid,
+            string.Join("\n",
+            [
+                "%YAML 1.1",
+                "%TAG !u! tag:unity3d.com,2011:",
+                "--- !u!21 &2100000",
+                "Material:",
+                "  m_Name: Lit",
+                "  m_Shader: {fileID: 46, guid: c5c9d31933d241c4b9047a5783f7f380, type: 3}",
+            ]));
+
+        using var store = new AssetSqliteStore(projectRoot, dbPath);
+        AssetSyncResult sync = await store.SyncWorkspaceAsync();
+
+        Assert.Equal(1, sync.TotalAssets);
+        AssetEntryDto? material = store.GetAssetByPath("Assets/Materials/Lit.mat");
+        Assert.NotNull(material);
+        Assert.Equal(AssetKind.Material, material!.Kind);
+        Assert.Equal(materialGuid, material.Guid);
+        Assert.NotNull(store.GetAssetByGuid(ParseGuid(materialGuid)));
+
+        File.WriteAllText(materialPath + ".meta", "fileFormatVersion: 2\nguid: b1b2c3d4e5f60718293a4b5c6d7e8f92\n");
+        await store.UpdateSingleAssetAsync(materialPath + ".meta");
+        Assert.Null(store.GetAssetByGuid(ParseGuid(materialGuid)));
+        Assert.Equal("b1b2c3d4e5f60718293a4b5c6d7e8f92", store.GetAssetByPath("Assets/Materials/Lit.mat")?.Guid);
+    }
+
     private static string WriteAssetWithMeta(string projectRoot, string relPath, string guidHex, string content)
     {
         string fullPath = Path.Combine(projectRoot, relPath.Replace('/', Path.DirectorySeparatorChar));

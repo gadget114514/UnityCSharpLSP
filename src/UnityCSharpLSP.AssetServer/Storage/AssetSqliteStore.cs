@@ -1430,11 +1430,12 @@ public sealed class AssetSqliteStore : IDisposable
         if (ext.Equals(".prefab", StringComparison.OrdinalIgnoreCase)) return AssetKind.Prefab;
         if (ext.Equals(".unity", StringComparison.OrdinalIgnoreCase)) return AssetKind.Scene;
         if (ext.Equals(".asset", StringComparison.OrdinalIgnoreCase)) return AssetKind.ScriptableObject;
+        if (ext.Equals(".mat", StringComparison.OrdinalIgnoreCase)) return AssetKind.Material;
         return AssetKind.OtherAsset;
     }
 
     private static bool ShouldScanYaml(AssetKind kind) =>
-        kind is AssetKind.Prefab or AssetKind.Scene or AssetKind.ScriptableObject;
+        kind is AssetKind.Prefab or AssetKind.Scene or AssetKind.ScriptableObject or AssetKind.Material;
 
     private static void ExecuteNonQuery(SqliteConnection connection, string sql)
     {

@@ -32,7 +32,7 @@ EXAMPLES:
 
 LLM / AI AGENT INTEGRATION (OpenCode, Claude Code, Cursor, etc.):
   To register this LSP server with OpenCode, add to your opencode.json:
-    { ""lsp"": { ""unity-csharp-2nek"": { ""command"": [""<path/to/UnityCSharpLSP.Server.exe>"", ""--stdio""], ""extensions"": ["".cs""] } } }
+    { ""lsp"": { ""unity-csharp-2nek"": { ""command"": [""<path/to/UnityCSharpLSP.Server.exe>"", ""--stdio""], ""extensions"": ["".cs"", "".prefab"", "".unity"", "".asset"", "".mat""] } } }
   Replace <path/to/UnityCSharpLSP.Server.exe> with the actual binary path (or just the exe name if on PATH).
   Alternatively, run `UnityCSharpLSP.Server --print-config` to auto-generate this with your resolved path.
 
@@ -91,7 +91,7 @@ $$"""
   "lsp": {
     "unity-csharp-2nek": {
       "command": ["{{exePath.Replace("\\", "/")}}", "--stdio"],
-      "extensions": [".cs"]
+      "extensions": [".cs", ".prefab", ".unity", ".asset", ".mat"]
     }
   }
 }

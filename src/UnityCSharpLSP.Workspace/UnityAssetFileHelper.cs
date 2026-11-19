@@ -5,13 +5,13 @@ namespace UnityCSharpLSP.Workspace;
 
 /// <summary>
 /// Helpers for identifying Unity serialized YAML asset files (<c>.prefab</c>, <c>.unity</c>,
-/// <c>.asset</c>) and resolving their referenced C# Roslyn symbols.
+/// <c>.asset</c>, <c>.mat</c>) and resolving their referenced C# Roslyn symbols.
 /// </summary>
 public static class UnityAssetFileHelper
 {
     /// <summary>
     /// Returns <c>true</c> if <paramref name="filePath"/> has a Unity YAML-serialized asset
-    /// extension (<c>.prefab</c>, <c>.unity</c>, or <c>.asset</c>).
+    /// extension (<c>.prefab</c>, <c>.unity</c>, <c>.asset</c>, or <c>.mat</c>).
     /// </summary>
     public static bool IsYamlAssetFile(string? filePath)
     {
@@ -23,7 +23,8 @@ public static class UnityAssetFileHelper
         var ext = Path.GetExtension(filePath);
         return string.Equals(ext, ".prefab", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(ext, ".unity", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(ext, ".asset", StringComparison.OrdinalIgnoreCase);
+               string.Equals(ext, ".asset", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(ext, ".mat", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
