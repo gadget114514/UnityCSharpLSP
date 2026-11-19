@@ -71,6 +71,23 @@ Options: `--stdio`, `--editor-path <path>`, `--print-config`, `--asset-daemon`, 
 
 Notes: stdout is reserved for LSP JSON-RPC (diagnostics go to stderr); multi-root workspaces supported; asset daemon auto-spawned by the LSP server when needed. Exit code 0 on success.
 
+### `lsp-refs` — one-shot / resident references CLI
+
+A lightweight wrapper that starts `UnityCSharpLSP.Server --stdio`, sends `initialize` → `didOpen` → `textDocument/references`, and prints `path:line` (1-based, one per line) parsed from the raw JSON response.
+
+```bash
+# One-shot: line/column are 1-based (editor-style)
+lsp-refs Assets/Scripts/Player.cs 12 9 --workspace D:/MyUnityProject
+
+# Resident: pre-starts the persistent asset daemon and keeps one LSP server warm.
+# Feed queries as "<file> <line> <col>" lines via stdin until EOF / Ctrl+C.
+lsp-refs --asset-daemon --workspace D:/MyUnityProject
+> Assets/Scripts/Player.cs 12 9
+> Assets/Scripts/GameConfig.cs 5 18
+```
+
+`--workspace` is optional: the nearest ancestor containing `Assets/` or `ProjectSettings/` is used, otherwise the file's directory (current directory in resident mode). The server binary is resolved from `$UNITYCSHARPLSP_SERVER`, the `lsp-refs` directory, the current directory, or `PATH`. Source edits are picked up because `didOpen` is re-sent with fresh text for every query; asset (`.meta`/`.prefab`/`.unity`/`.asset`) edits are picked up automatically by the daemon's own file watcher. In resident mode the asset daemon is left running after exit and self-terminates on its idle timeout.
+
 ---
 
 ## 🤝 Coexistence with the Unity Editor
@@ -162,13 +179,13 @@ winget install Microsoft.DotNet.SDK.8
 
 1. Go to the [Releases](https://github.com/gadget114514/UnityCSharpLSP/releases) page.
 2. Download and run `UnityCSharpLSP-v*-Setup.exe`.
-3. Follow the wizard. It will install the server and **automatically add the installation directory to your User `PATH`**.
-4. Open a new terminal, and `UnityCSharpLSP.Server.exe` will be directly accessible from anywhere.
+3. Follow the wizard. It will install `UnityCSharpLSP.Server.exe` and `lsp-refs.exe` and **automatically add the installation directory to your User `PATH`**.
+4. Open a new terminal, and both executables will be directly accessible from anywhere.
 
 ### Method 2: Portable Zip Archive
 
 1. Download `UnityCSharpLSP-v*-win-x64.zip` from [Releases](https://github.com/gadget114514/UnityCSharpLSP/releases).
-2. Extract the archive and place `UnityCSharpLSP.Server.exe` into any directory on your system `PATH`.
+2. Extract the archive and place `UnityCSharpLSP.Server.exe` and `lsp-refs.exe` into any directory on your system `PATH`.
 
 ### Method 3: Build from Source
 
@@ -179,11 +196,12 @@ Ensure [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) is insta
 git clone https://github.com/gadget114514/UnityCSharpLSP.git
 cd UnityCSharpLSP
 
-# Publish as a standalone single-file binary
+# Publish both standalone single-file binaries
 dotnet publish src/UnityCSharpLSP.Server -c Release -r win-x64 -p:PublishSingleFile=true -o ./publish
+dotnet publish src/UnityCSharpLSP.Refs -c Release -r win-x64 -p:PublishSingleFile=true -o ./publish
 ```
 
-The compiled single-file binary will be located at `./publish/UnityCSharpLSP.Server.exe`.
+The compiled binaries will be located at `./publish/UnityCSharpLSP.Server.exe` and `./publish/lsp-refs.exe`.
 
 ---
 

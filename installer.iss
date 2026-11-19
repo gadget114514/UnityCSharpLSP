@@ -1,8 +1,9 @@
 #define MyAppName "UnityCSharpLSP"
-#define MyAppVersion "0.4.1"
+#define MyAppVersion "0.4.2"
 #define MyAppPublisher "gadget114514"
 #define MyAppURL "https://github.com/gadget114514/UnityCSharpLSP"
 #define MyAppExeName "UnityCSharpLSP.Server.exe"
+#define MyRefsExeName "lsp-refs.exe"
 
 [Setup]
 AppId={{E6F7A9C0-8B35-4F54-9E11-3D5F5A9A7B31}
@@ -25,6 +26,7 @@ WizardStyle=modern
 
 [Files]
 Source: "artifacts\publish\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "artifacts\publish\{#MyRefsExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Tasks]
 Name: "addtopath"; Description: "Add application directory to User PATH environment variable"; GroupDescription: "Environment Settings:"; Flags: checkedonce
