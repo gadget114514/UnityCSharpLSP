@@ -187,7 +187,7 @@ sequenceDiagram
 | `textDocument/documentSymbol` | Document outline | Hierarchical `DocumentSymbol` tree for C# symbols, or GameObject/Component/PrefabInstance hierarchy tree for `.prefab`/`.unity` |
 | `workspace/symbol` | Workspace symbols | Searches every workspace root/project with `Compilation.GetSymbolsWithName`; emits custom-data `WorkspaceSymbol` and supports partial results |
 | `workspaceSymbol/resolve` | Symbol resolve (custom) | Fills `containerName`, `detail` and `kind` from the `data` payload carried by `workspace/symbol` |
-| `workspace/executeCommand` | Commands | `unitycsharp.reloadWorkspace` (rebuilds roots + rescans AssetServer), `unitycsharp.showWorkspaceInfo`, `unitycsharp.getSceneOrPrefabHierarchy`, `unitycsharp.findSymbolUsagesInAssets`, `unitycsharp.assetServerStatus` |
+| `workspace/executeCommand` | Commands | `unitycsharp.reloadWorkspace` (rebuilds roots + rescans AssetServer), `unitycsharp.showWorkspaceInfo`, `unitycsharp.getSceneOrPrefabHierarchy`, `unitycsharp.findSymbolUsagesInAssets`, `unitycsharp.findGuidReferences`, `unitycsharp.listReferencedGuids`, `unitycsharp.assetServerStatus` |
 | `workspace/didChangeConfiguration` | Settings | Stores typed `enableDiagnostics` / `predefinedSymbols`; gates push-diagnostic publication |
 | `workspace/willRenameFiles` / `didRenameFiles` | Rename events | `will` returns no edits; `did` removes the old document and adds the new one in the owning workspace |
 | `workspace/willCreateFiles` / `didCreateFiles` | Create events | `will` returns no edits; `did` adds new `.cs` files from disk |

@@ -86,13 +86,17 @@ internal sealed class LspRefsClient : IDisposable
         string filePath,
         int line,
         int character,
-        CancellationToken ct)
+        CancellationToken ct,
+        string[]? includePatterns = null,
+        string[]? excludePatterns = null)
     {
         JsonElement result = await RequestAsync("textDocument/references", new
         {
             textDocument = new { uri = ToUri(filePath) },
             position = new { line, character },
             context = new { includeDeclaration = true },
+            includePatterns,
+            excludePatterns,
         }, ct).ConfigureAwait(false);
 
         var locations = new List<(string, int)>();

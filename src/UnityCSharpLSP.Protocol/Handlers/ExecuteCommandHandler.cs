@@ -18,6 +18,8 @@ public sealed class ExecuteCommandHandler
     public const string ShowWorkspaceInfoCommand = "unitycsharp.showWorkspaceInfo";
     public const string GetSceneOrPrefabHierarchyCommand = "unitycsharp.getSceneOrPrefabHierarchy";
     public const string FindSymbolUsagesInAssetsCommand = "unitycsharp.findSymbolUsagesInAssets";
+    public const string FindGuidReferencesCommand = "unitycsharp.findGuidReferences";
+    public const string ListReferencedGuidsCommand = "unitycsharp.listReferencedGuids";
     public const string AssetServerStatusCommand = "unitycsharp.assetServerStatus";
 
     public static readonly string[] Commands =
@@ -26,6 +28,8 @@ public sealed class ExecuteCommandHandler
         ShowWorkspaceInfoCommand,
         GetSceneOrPrefabHierarchyCommand,
         FindSymbolUsagesInAssetsCommand,
+        FindGuidReferencesCommand,
+        ListReferencedGuidsCommand,
         AssetServerStatusCommand,
     };
 
@@ -87,6 +91,12 @@ public sealed class ExecuteCommandHandler
 
                 case FindSymbolUsagesInAssetsCommand:
                     return await HandleFindSymbolUsagesInAssetsAsync(@params, ct).ConfigureAwait(false);
+
+                case FindGuidReferencesCommand:
+                    return await HandleFindGuidReferencesAsync(@params, ct).ConfigureAwait(false);
+
+                case ListReferencedGuidsCommand:
+                    return await HandleListReferencedGuidsAsync(@params, ct).ConfigureAwait(false);
 
                 case AssetServerStatusCommand:
                     return await HandleAssetServerStatusAsync(@params, ct).ConfigureAwait(false);
@@ -175,9 +185,72 @@ public sealed class ExecuteCommandHandler
             MemberName = memberName,
             IncludeTransitiveScenes = includeTransitiveScenes,
             MaxResults = maxResults,
+            IncludePatterns = ReadStringArray(arg0?["includePatterns"]),
+            ExcludePatterns = ReadStringArray(arg0?["excludePatterns"]),
         };
 
         return await ws.AssetService.FindReferencesAsync(query, ct).ConfigureAwait(false);
+    }
+
+    private async Task<AssetGuidReferenceResultDto> HandleFindGuidReferencesAsync(
+        JObject? @params,
+        CancellationToken ct)
+    {
+        var result = new AssetGuidReferenceResultDto();
+        var router = _routerProvider();
+        if (router is null)
+        {
+            return result;
+        }
+
+        var arg0 = GetFirstArgumentObject(@params);
+        var pathHint = NormalizePathOrUri(
+            arg0?["path"]?.Value<string>() ?? arg0?["projectRoot"]?.Value<string>());
+        var ws = ResolveManager(router, pathHint) ?? router.AllManagers.FirstOrDefault();
+        if (ws is null)
+        {
+            return result;
+        }
+
+        var query = new AssetGuidReferenceQueryDto
+        {
+            Guid = arg0?["guid"]?.Value<string>() ?? string.Empty,
+            MaxResults = arg0?["maxResults"]?.Value<int?>() ?? 500,
+            IncludePatterns = ReadStringArray(arg0?["includePatterns"]),
+            ExcludePatterns = ReadStringArray(arg0?["excludePatterns"]),
+        };
+
+        return await ws.AssetService.GetGuidReferencesAsync(query, ct).ConfigureAwait(false);
+    }
+
+    private async Task<AssetReferencedGuidResultDto> HandleListReferencedGuidsAsync(
+        JObject? @params,
+        CancellationToken ct)
+    {
+        var result = new AssetReferencedGuidResultDto();
+        var router = _routerProvider();
+        if (router is null)
+        {
+            return result;
+        }
+
+        var arg0 = GetFirstArgumentObject(@params);
+        var assetPath = NormalizePathOrUri(
+            arg0?["path"]?.Value<string>() ?? arg0?["assetPath"]?.Value<string>());
+        if (string.IsNullOrWhiteSpace(assetPath))
+        {
+            return result;
+        }
+
+        var ws = ResolveManager(router, assetPath);
+        if (ws is null)
+        {
+            return result;
+        }
+
+        return await ws.AssetService
+            .GetReferencedGuidsAsync(new AssetReferencedGuidQueryDto { AssetPath = assetPath }, ct)
+            .ConfigureAwait(false);
     }
 
     private async Task<DaemonStatusResponse?> HandleAssetServerStatusAsync(
@@ -206,6 +279,20 @@ public sealed class ExecuteCommandHandler
     {
         var args = @params?["arguments"] as JArray;
         return args?.FirstOrDefault() as JObject;
+    }
+
+    private static string[]? ReadStringArray(JToken? token)
+    {
+        if (token is not JArray array || array.Count == 0)
+        {
+            return null;
+        }
+
+        return array
+            .Where(item => item.Type == JTokenType.String)
+            .Select(item => item.Value<string>())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToArray()!;
     }
 
     private static string? NormalizePathOrUri(string? pathOrUri)

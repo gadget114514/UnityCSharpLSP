@@ -34,7 +34,7 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
   - **Go to Definition (`textDocument/definition`)**: Seamless navigation across `.asmdef` boundaries, YAML asset references, and `SceneManager.LoadScene` calls.
   - **Hover Tooltips (`textDocument/hover`)**: Rich method and type signatures with XML `<summary>` doc comments (plus `[Tooltip]` enrichment when hovering serialized fields in YAML).
   - **Code Completion (`textDocument/completion`)**: Dot member access completions, local/type completions, **MonoBehaviour Magic Methods snippet completions**, and **Build Scene completions** inside `SceneManager.LoadScene`.
-  - **Find References (`textDocument/references`)**: Solution-wide C# symbol search combined with direct & transitive `.prefab` / `.unity` / `.asset` usages.
+  - **Find References (`textDocument/references`)**: Solution-wide C# symbol search combined with direct & transitive `.prefab` / `.unity` / `.asset` usages, with optional glob filters (`includePatterns` / `excludePatterns`) so results can be scoped to `*.cs`, `Something*.cs`, `*.asset`, etc.
   - **Go to Implementation (`textDocument/implementation`)**: Jump from interfaces and abstract/virtual members to their implementations.
   - **Document Symbols (`textDocument/documentSymbol`)**: Hierarchical outline of C# namespaces/types/members, and GameObject/Component/PrefabInstance trees for `.prefab` and `.unity` files.
   - **Workspace Symbols (`workspace/symbol`, `workspaceSymbol/resolve`)**: Project-wide symbol search by name with lazily resolved symbol details.
@@ -43,7 +43,7 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
 - **🗂 Multi-Root Workspaces**:
   - Accepts multiple `workspaceFolders`; a `WorkspaceRouter` builds one Roslyn workspace per root and routes each document to the longest matching root prefix. Single-root (`rootUri` / `rootPath`) behaviour is unchanged.
 - **🧩 Workspace Commands & Configuration**:
-  - `workspace/executeCommand` supports `unitycsharp.reloadWorkspace` (rebuild workspaces & rescan AssetServer), `unitycsharp.showWorkspaceInfo` (summary), `unitycsharp.getSceneOrPrefabHierarchy` (GameObject/Component JSON tree), `unitycsharp.findSymbolUsagesInAssets`, and `unitycsharp.assetServerStatus`.
+  - `workspace/executeCommand` supports `unitycsharp.reloadWorkspace` (rebuild workspaces & rescan AssetServer), `unitycsharp.showWorkspaceInfo` (summary), `unitycsharp.getSceneOrPrefabHierarchy` (GameObject/Component JSON tree), `unitycsharp.findSymbolUsagesInAssets`, `unitycsharp.findGuidReferences` (assets referencing a GUID, scanned on demand), `unitycsharp.listReferencedGuids` (all GUIDs referenced by one asset, including unresolved), and `unitycsharp.assetServerStatus`.
   - `workspace/didChangeConfiguration` stores typed settings (`enableDiagnostics`, `predefinedSymbols`, `propagateRenamesToAssets`, `reportDanglingAssetReferences`, `reportPrefabOverrideImpact`, `reportUnattachedScripts`) and can disable diagnostic publication. snake_case aliases are accepted for every setting.
   - Full file-operation events (`workspace/willCreateFiles` / `didCreateFiles`, `willRenameFiles` / `didRenameFiles`, `willDeleteFiles` / `didDeleteFiles`) keep the workspace in sync with editor file changes.
   - Advertises `positionEncoding: utf-16` and work-done progress for long-running commands.
@@ -83,6 +83,7 @@ A lightweight wrapper that starts `UnityCSharpLSP.Server --stdio`, sends `initia
 ```bash
 # One-shot: line/column are 1-based (editor-style)
 lsp-refs Assets/Scripts/Player.cs 12 9 --workspace D:/MyUnityProject
+lsp-refs Assets/Scripts/Player.cs 12 9 --workspace D:/MyUnityProject --include '*.cs,*.prefab' --exclude '*Generated*'
 
 # Resident: pre-starts the persistent asset daemon and keeps one LSP server warm.
 # Feed queries as "<file> <line> <col>" lines via stdin until EOF / Ctrl+C.
@@ -91,7 +92,19 @@ lsp-refs --asset-daemon --workspace D:/MyUnityProject
 > Assets/Scripts/GameConfig.cs 5 18
 ```
 
-`--workspace` is optional: the nearest ancestor containing `Assets/` or `ProjectSettings/` is used, otherwise the file's directory (current directory in resident mode). The server binary is resolved from `$UNITYCSHARPLSP_SERVER`, the `lsp-refs` directory, the current directory, or `PATH`. Source edits are picked up because `didOpen` is re-sent with fresh text for every query; asset (`.meta`/`.prefab`/`.unity`/`.asset`/`.mat`) edits are picked up automatically by the daemon's own file watcher. In resident mode the asset daemon is left running after exit and self-terminates on its idle timeout.
+`--workspace` is optional: the nearest ancestor containing `Assets/` or `ProjectSettings/` is used, otherwise the file's directory (current directory in resident mode). `--include` / `--exclude` are repeatable and accept comma-separated globs; a pattern without `/` matches the file name, `**` spans directories, a leading `~` matches a substring anywhere in the path (e.g. `~Weapon`), and a leading `!` negates a pattern. The server binary is resolved from `$UNITYCSHARPLSP_SERVER`, the `lsp-refs` directory, the current directory, or `PATH`. Source edits are picked up because `didOpen` is re-sent with fresh text for every query; asset (`.meta`/`.prefab`/`.unity`/`.asset`/`.mat`) edits are picked up automatically by the daemon's own file watcher. In resident mode the asset daemon is left running after exit and self-terminates on its idle timeout.
+
+The same filters can be sent directly over LSP: add top-level `includePatterns` / `excludePatterns` arrays to `textDocument/references` params. `unitycsharp.findSymbolUsagesInAssets` and `unitycsharp.findGuidReferences` accept them in `arguments[0]` as well.
+
+```json
+{"method":"textDocument/references","params":{
+  "textDocument":{"uri":"file:///D:/Proj/Assets/Scripts/PlayerController.cs"},
+  "position":{"line":5,"character":24},
+  "context":{"includeDeclaration":true},
+  "includePatterns":["*.cs","*.prefab"],
+  "excludePatterns":["*Generated*"]
+}}
+```
 
 ---
 
@@ -121,6 +134,15 @@ Unity projects store GameObjects, components, and serialized fields in `.prefab`
 - **Prefab Override Impact diagnostics**: opt-in `UNITY0003` warnings on `propertyPath` lines whose values override a base prefab.
 - **Unattached Script diagnostics**: opt-in `UNITY0004` hints on C# `MonoBehaviour` / `ScriptableObject` declarations that are never attached to any prefab or scene.
 - **SceneManager.LoadScene support**: completion and jump-to-scene for `SceneManager.LoadScene("...")`.
+- **On-demand GUID queries**: `unitycsharp.findGuidReferences` finds every asset that references a GUID, and `unitycsharp.listReferencedGuids` lists every GUID referenced by one asset (including unresolved ones). Both scan YAML on demand with a per-file cache; no extra persistent index is maintained.
+
+Example (`workspace/executeCommand` arguments):
+
+```json
+{ "command": "unitycsharp.findGuidReferences", "arguments": [{ "guid": "43c06344c1d574b42ab749d9a917edca", "maxResults": 100 }] }
+{ "command": "unitycsharp.listReferencedGuids", "arguments": [{ "path": "Assets/Prefabs/Player.prefab" }] }
+```
+
 - **No Unity Editor required**: all of the above runs headlessly from YAML + C# metadata, so AI agents and CI can use it.
 
 ---
@@ -219,12 +241,12 @@ The compiled binaries will be located at `./publish/UnityCSharpLSP.Server.exe` a
 
 The shortest path from zero to a working setup—let your LLM (AI agent) do the wiring:
 
-1. **Install** UnityCSharpLSP using the Windows Installer above. The installer adds the install directory to your User `PATH`.
+1. **Install** UnityCSharpLSP using the Windows Installer above. The installer adds the install directory to your User `PATH` and provides `UnityCSharpLSP.exe` as an alias of `UnityCSharpLSP.Server.exe`.
 2. **Ask your LLM to find it on `PATH`**, for example:
-   > Search `PATH` for `UnityCSharpLSP.Server.exe` and configure UnityCSharpLSP as my C# language server.
-3. The LLM locates the executable (or runs `UnityCSharpLSP.Server.exe --print-config`) and writes the appropriate LSP configuration for your editor/agent, so `unitycsharplsp` is ready to use.
+   > Search `PATH` for `UnityCSharpLSP.exe` and configure UnityCSharpLSP as my C# language server.
+3. The LLM locates the executable (or runs `UnityCSharpLSP.exe --print-config`) and writes the appropriate LSP configuration for your editor/agent, so `unitycsharplsp` is ready to use.
 
-> On Windows you can verify the binary is on `PATH` with `where UnityCSharpLSP.Server.exe` (or `which UnityCSharpLSP.Server.exe` on other shells).
+> On Windows you can verify the binary is on `PATH` with `where UnityCSharpLSP.exe` (or `which UnityCSharpLSP.Server.exe` on other shells). Both `UnityCSharpLSP.exe` and `UnityCSharpLSP.Server.exe` are the same executable.
 
 ---
 
@@ -254,6 +276,8 @@ Or manually configure your `opencode.json` (or `~/.config/opencode/opencode.json
   }
 }
 ```
+
+> **⚠️ `extensions` must include the YAML asset extensions.** The key is `extensions` (an array of file suffixes); there is no `extensionToLanguage` setting in opencode. If it contains only `.cs`, the server will never receive `.prefab` / `.unity` / `.asset` / `.mat` buffers, so those features appear unavailable. Re-run `UnityCSharpLSP.exe --print-config` to regenerate a complete snippet.
 
 ### 2. Neovim (`nvim-lspconfig`)
 
@@ -402,7 +426,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 | `textDocument/definition` | Jumps to declarations across `.asmdef` boundaries; navigates YAML `guid:`/field lines to target assets/C# fields; jumps from `SceneManager.LoadScene` / `LoadSceneAsync` strings to `.unity` files | `DefinitionHandler.cs` |
 | `textDocument/typeDefinition` | Jumps to the type declaration of the symbol at the cursor | `TypeDefinitionHandler.cs` |
 | `textDocument/declaration` | Jumps to the symbol declaration (including `OriginalDefinition`) | `DeclarationHandler.cs` |
-| `textDocument/references` | Solution-wide C# reference search plus direct & transitive `.prefab` / `.unity` / `.asset` usages (`m_Script`, `m_SourcePrefab`, serialized fields, overrides, `UnityEvent`) | `ReferencesHandler.cs` |
+| `textDocument/references` | Solution-wide C# reference search plus direct & transitive `.prefab` / `.unity` / `.asset` usages (`m_Script`, `m_SourcePrefab`, serialized fields, overrides, `UnityEvent`); optional top-level `includePatterns` / `excludePatterns` glob arrays filter both C# and asset locations | `ReferencesHandler.cs` |
 | `textDocument/completion` | Member completion, scope completion, MonoBehaviour message snippet completion, enabled build-scene completion inside `SceneManager.LoadScene("` / `LoadSceneAsync("`, and indexed-asset GUID completion on YAML `guid:` lines | `CompletionHandler.cs` |
 | `completionItem/resolve` | Lazily resolves completion item `Detail` and XML documentation | `CompletionHandler.cs` |
 | `textDocument/documentSymbol` | Hierarchical outline of C# namespaces, types, and members, or GameObject/Component/PrefabInstance hierarchy tree for `.prefab` / `.unity` files | `DocumentSymbolHandler.cs` |
@@ -467,7 +491,7 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 | `workspace/symbol` | request | Symbol search across all workspace folders and assemblies (no result limit, supports partial results). Uses the LSP 3.17 `WorkspaceSymbol[]` form with `data` / `tags` / `detail` |
 | `workspace/diagnostic` | request | Pull-style workspace diagnostics. Returns reports for all documents with `resultId`, and returns `unchanged` when `previousResultIds` match (also supports partial result tokens) |
 | `workspaceSymbol/resolve` | request | Fills in detailed information from a symbol's `data` (custom method) |
-| `workspace/executeCommand` | request | Executes `unitycsharp.reloadWorkspace`, `unitycsharp.showWorkspaceInfo`, `unitycsharp.getSceneOrPrefabHierarchy`, `unitycsharp.findSymbolUsagesInAssets`, and `unitycsharp.assetServerStatus` |
+| `workspace/executeCommand` | request | Executes `unitycsharp.reloadWorkspace`, `unitycsharp.showWorkspaceInfo`, `unitycsharp.getSceneOrPrefabHierarchy`, `unitycsharp.findSymbolUsagesInAssets`, `unitycsharp.findGuidReferences`, `unitycsharp.listReferencedGuids`, and `unitycsharp.assetServerStatus` |
 | `workspace/didChangeConfiguration` | notification | Stores settings as a typed object. `enableDiagnostics` toggles push diagnostics on/off; `predefinedSymbols`, `propagateRenamesToAssets`, `reportDanglingAssetReferences`, `reportPrefabOverrideImpact`, and `reportUnattachedScripts` are retained |
 | `workspace/didChangeWatchedFiles` | notification | Detects creation, modification, and deletion of `.cs` files and reflects them in the Roslyn compilation |
 | `workspace/willRenameFiles` | request | Renames types matching the old file name to the new file name via the Roslyn `Renamer`, returning solution-wide `TextEdit[]` in `WorkspaceEdit.Changes` |
@@ -509,3 +533,14 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 ### 8. Constraints & Known Limitations
 
 - None in particular.
+
+---
+
+## 📝 Release Notes
+
+### v0.4.5
+
+- **🔍 Glob filters for references**: `textDocument/references`, `unitycsharp.findSymbolUsagesInAssets`, and `unitycsharp.findGuidReferences` now accept top-level `includePatterns` / `excludePatterns` glob arrays (passed in `arguments[0]` for workspace commands), and the `lsp-refs` CLI gains repeatable, comma-separated `--include` / `--exclude` options. Patterns without `/` match the file name (`*.cs`, `Something*.cs`, `*.asset`), `**` spans directories, a leading `~` matches a path substring (e.g. `~Weapon`), and a leading `!` negates a pattern.
+- **🧭 On-demand GUID queries**: added `unitycsharp.findGuidReferences` (every asset that references a GUID) and `unitycsharp.listReferencedGuids` (every GUID referenced by one asset, including unresolved ones with occurrence counts and PackageCache detection). Both scan YAML on demand with a per-file `(mtime, size)` cache — no extra persistent index is maintained.
+- **📦 Installer alias**: the Windows installer now creates `UnityCSharpLSP.exe` as a hard-link alias of `UnityCSharpLSP.Server.exe` (with a copy fallback) and removes it on uninstall; Quick Setup and examples use the shorter name.
+- **📖 Documentation**: clarified that the OpenCode `extensions` list must include `.prefab` / `.unity` / `.asset` / `.mat` for YAML asset features to reach the server.

@@ -1,8 +1,9 @@
 #define MyAppName "UnityCSharpLSP"
-#define MyAppVersion "0.4.4"
+#define MyAppVersion "0.4.5"
 #define MyAppPublisher "gadget114514"
 #define MyAppURL "https://github.com/gadget114514/UnityCSharpLSP"
 #define MyAppExeName "UnityCSharpLSP.Server.exe"
+#define MyAppAliasExeName "UnityCSharpLSP.exe"
 #define MyRefsExeName "lsp-refs.exe"
 
 [Setup]
@@ -38,6 +39,9 @@ const
 
 function SendMessageTimeout(hWnd: HWND; Msg: Cardinal; wParam: LongInt; lParam: String; fuFlags: Cardinal; uTimeout: Cardinal; out lpdwResult: LongInt): LongInt;
 external 'SendMessageTimeoutW@user32.dll stdcall';
+
+function CreateHardLink(lpFileName, lpExistingFileName: String; lpSecurityAttributes: LongInt): Boolean;
+external 'CreateHardLinkW@kernel32.dll stdcall';
 
 procedure AddToPath();
 var
@@ -90,11 +94,37 @@ begin
     end;
 end;
 
+procedure CreateExeAlias();
+var
+    TargetPath: String;
+    AliasPath: String;
+begin
+    TargetPath := ExpandConstant('{app}\{#MyAppExeName}');
+    AliasPath := ExpandConstant('{app}\{#MyAppAliasExeName}');
+    if FileExists(TargetPath) then
+    begin
+        DeleteFile(AliasPath);
+        if not CreateHardLink(AliasPath, TargetPath, 0) then
+            CopyFile(TargetPath, AliasPath, False);
+    end;
+end;
+
+procedure RemoveExeAlias();
+var
+    AliasPath: String;
+begin
+    AliasPath := ExpandConstant('{app}\{#MyAppAliasExeName}');
+    if FileExists(AliasPath) then
+        DeleteFile(AliasPath);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-    if (CurStep = ssPostInstall) and WizardIsTaskSelected('addtopath') then
+    if CurStep = ssPostInstall then
     begin
-        AddToPath();
+        CreateExeAlias();
+        if WizardIsTaskSelected('addtopath') then
+            AddToPath();
     end;
 end;
 
@@ -102,6 +132,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
     if CurUninstallStep = usPostUninstall then
     begin
+        RemoveExeAlias();
         RemoveFromPath();
     end;
 end;

@@ -195,6 +195,18 @@ public sealed class AssetDaemonClient : IAssetDataService, IDisposable
         return await target.FindReferencesAsync(query, ct).ConfigureAwait(false);
     }
 
+    public async Task<AssetGuidReferenceResultDto> GetGuidReferencesAsync(AssetGuidReferenceQueryDto query, CancellationToken ct = default)
+    {
+        IAssetDataService target = await EnsureInitializedAsync(ct).ConfigureAwait(false);
+        return await target.GetGuidReferencesAsync(query, ct).ConfigureAwait(false);
+    }
+
+    public async Task<AssetReferencedGuidResultDto> GetReferencedGuidsAsync(AssetReferencedGuidQueryDto query, CancellationToken ct = default)
+    {
+        IAssetDataService target = await EnsureInitializedAsync(ct).ConfigureAwait(false);
+        return await target.GetReferencedGuidsAsync(query, ct).ConfigureAwait(false);
+    }
+
     public async Task<AssetWorkspaceEditDto> ComputeRenameEditsAsync(AssetRenameQueryDto query, CancellationToken ct = default)
     {
         IAssetDataService target = await EnsureInitializedAsync(ct).ConfigureAwait(false);

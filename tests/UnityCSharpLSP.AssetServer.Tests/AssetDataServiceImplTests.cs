@@ -810,6 +810,46 @@ public sealed class AssetDataServiceImplTests
         return fullPath;
     }
 
+    [Fact]
+    public async Task GuidReferenceMethods_DummyProject_ForwardAndReverseLookup()
+    {
+        using var tempDir = new TempDirectoryScope();
+        string projectRoot = GetDummyProjectRoot();
+        using AssetDataServiceImpl service = await CreateInitializedServiceAsync(projectRoot, tempDir.Path);
+
+        AssetReferencedGuidResultDto forward = await service.GetReferencedGuidsAsync(
+            new AssetReferencedGuidQueryDto { AssetPath = "Assets/Prefabs/Player.prefab" });
+
+        Assert.Equal(2, forward.References.Length);
+        AssetReferencedGuidItemDto scriptRef = Assert.Single(forward.References, item => item.Guid == PlayerControllerGuid);
+        Assert.Equal(45, scriptRef.Line);
+        Assert.Equal(1, scriptRef.OccurrenceCount);
+        Assert.NotNull(scriptRef.ResolvedPath);
+        Assert.Equal(AssetKind.CSharpScript, scriptRef.ResolvedKind);
+        AssetReferencedGuidItemDto configRef = Assert.Single(forward.References, item => item.Guid == "a1b2c3d4e5f60718293a4b5c6d7e8f90");
+        Assert.Equal(48, configRef.Line);
+        Assert.Null(configRef.ResolvedPath);
+        Assert.Null(configRef.ResolvedKind);
+        Assert.False(configRef.InPackageCache);
+
+        AssetGuidReferenceResultDto reverse = await service.GetGuidReferencesAsync(
+            new AssetGuidReferenceQueryDto { Guid = "a1b2c3d4e5f60718293a4b5c6d7e8f90" });
+
+        Assert.Equal(2, reverse.References.Length);
+        Assert.Contains(reverse.References, item =>
+            item.RelativePath == "Assets/Prefabs/Player.prefab" && item.Line == 48 && item.AssetKind == AssetKind.Prefab);
+        Assert.Contains(reverse.References, item =>
+            item.RelativePath == "Assets/Scenes/MainScene.unity" && item.Line == 45 && item.AssetKind == AssetKind.Scene);
+
+        AssetGuidReferenceResultDto invalid = await service.GetGuidReferencesAsync(
+            new AssetGuidReferenceQueryDto { Guid = "not-a-guid" });
+        Assert.Empty(invalid.References);
+
+        AssetReferencedGuidResultDto missing = await service.GetReferencedGuidsAsync(
+            new AssetReferencedGuidQueryDto { AssetPath = "Assets/DoesNotExist.prefab" });
+        Assert.Empty(missing.References);
+    }
+
     private static string GetDummyProjectRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

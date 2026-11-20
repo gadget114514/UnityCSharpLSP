@@ -277,6 +277,56 @@ public sealed class AssetReferencesAndCodeLensTests
         throw new InvalidOperationException($"Could not find '{lineNeedle}' / '{token}'.");
     }
 
+    [Fact]
+    public async Task References_WithIncludeAndExcludePatterns_FiltersCSharpAndAssetLocations()
+    {
+        var (server, client, dummyPath) = await CreateInitializedSessionAsync();
+        try
+        {
+            var playerControllerPath = Path.Combine(dummyPath, "Assets", "Scripts", "PlayerController.cs");
+            var playerPrefabPath = Path.Combine(dummyPath, "Assets", "Prefabs", "Player.prefab");
+            var mainScenePath = Path.Combine(dummyPath, "Assets", "Scenes", "MainScene.unity");
+
+            var pos = FindPosition(playerControllerPath, "public sealed class PlayerController", "PlayerController");
+
+            var prefabOnly = JObject.FromObject(new ReferenceParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = new Uri(playerControllerPath) },
+                Position = pos,
+                Context = new ReferenceContext { IncludeDeclaration = true },
+            });
+            prefabOnly["includePatterns"] = new JArray("*.prefab");
+
+            var prefabLocations = await client.InvokeWithParameterObjectAsync<LspLocation[]?>(
+                Methods.TextDocumentReferencesName,
+                prefabOnly);
+
+            Assert.NotNull(prefabLocations);
+            Assert.All(prefabLocations, loc => Assert.True(loc.Uri.LocalPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)));
+            Assert.Contains(prefabLocations, loc => PathsEqual(loc.Uri.LocalPath, playerPrefabPath));
+
+            var noScene = JObject.FromObject(new ReferenceParams
+            {
+                TextDocument = new TextDocumentIdentifier { Uri = new Uri(playerControllerPath) },
+                Position = pos,
+                Context = new ReferenceContext { IncludeDeclaration = true },
+            });
+            noScene["excludePatterns"] = new JArray("*.unity");
+
+            var filteredLocations = await client.InvokeWithParameterObjectAsync<LspLocation[]?>(
+                Methods.TextDocumentReferencesName,
+                noScene);
+
+            Assert.NotNull(filteredLocations);
+            Assert.DoesNotContain(filteredLocations, loc => PathsEqual(loc.Uri.LocalPath, mainScenePath));
+            Assert.Contains(filteredLocations, loc => PathsEqual(loc.Uri.LocalPath, playerPrefabPath));
+        }
+        finally
+        {
+            await ShutdownAsync(server, client);
+        }
+    }
+
     private static async Task<(LspJsonRpcSession Server, JsonRpc Client, string DummyPath)> CreateInitializedSessionAsync()
     {
         var dummyPath = GetDummyProjectPath();

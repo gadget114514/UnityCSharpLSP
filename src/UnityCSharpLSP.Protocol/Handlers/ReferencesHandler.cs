@@ -3,6 +3,8 @@ using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
 using StreamJsonRpc;
 using UnityCSharpLSP.AssetServer.Contracts;
+using UnityCSharpLSP.AssetServer.Parsing;
+using UnityCSharpLSP.Protocol.Models;
 using UnityCSharpLSP.Workspace;
 using LspLocation = Microsoft.VisualStudio.LanguageServer.Protocol.Location;
 using LspRange = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
@@ -22,19 +24,21 @@ public sealed class ReferencesHandler
     }
 
     [JsonRpcMethod(Methods.TextDocumentReferencesName, UseSingleObjectParameterDeserialization = true)]
-    public async Task<LspLocation[]?> FindReferences(ReferenceParams @params, CancellationToken ct = default)
+    public async Task<LspLocation[]?> FindReferences(UnityReferenceParams @params, CancellationToken ct = default)
     {
         var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
-        if (ws is null || @params.TextDocument?.Uri is null || @params.Position is null)
+        var textDocument = @params.TextDocument;
+        var position = @params.Position;
+        if (ws is null || textDocument?.Uri is null || position is null)
         {
             return null;
         }
 
-        var filePath = @params.TextDocument.Uri.LocalPath;
+        var filePath = textDocument.Uri.LocalPath;
         var (symbol, _) = await ws.GetSymbolAtPositionAsync(
             filePath,
-            @params.Position.Line,
-            @params.Position.Character,
+            position.Line,
+            position.Character,
             ct).ConfigureAwait(false);
 
         if (symbol is null)
@@ -107,6 +111,8 @@ public sealed class ReferencesHandler
         var assetQuery = CreateAssetReferenceQuery(symbol);
         if (assetQuery is not null)
         {
+            assetQuery.IncludePatterns = @params.IncludePatterns;
+            assetQuery.ExcludePatterns = @params.ExcludePatterns;
             var assetRefs = await ws.AssetService.FindReferencesAsync(assetQuery, ct).ConfigureAwait(false);
             foreach (var loc in assetRefs.Locations)
             {
@@ -114,7 +120,13 @@ public sealed class ReferencesHandler
             }
         }
 
-        return results.Count > 0 ? results.ToArray() : null;
+        var filtered = results
+            .Where(location => GlobPatternMatcher.MatchesAny(location.Uri.LocalPath, @params.IncludePatterns) &&
+                               !(@params.ExcludePatterns is { Length: > 0 } &&
+                                  GlobPatternMatcher.MatchesAny(location.Uri.LocalPath, @params.ExcludePatterns)))
+            .ToArray();
+
+        return filtered.Length > 0 ? filtered : null;
     }
 
     private static AssetReferenceQueryDto? CreateAssetReferenceQuery(ISymbol symbol)

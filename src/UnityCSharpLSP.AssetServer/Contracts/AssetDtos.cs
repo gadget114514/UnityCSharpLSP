@@ -120,6 +120,12 @@ public sealed class AssetReferenceQueryDto
 
     [JsonProperty("maxResults")]
     public int MaxResults { get; set; } = 500;
+
+    [JsonProperty("includePatterns")]
+    public string[]? IncludePatterns { get; set; }
+
+    [JsonProperty("excludePatterns")]
+    public string[]? ExcludePatterns { get; set; }
 }
 
 public sealed class AssetReferenceLocationDto
@@ -159,6 +165,90 @@ public sealed class AssetReferenceResultDto
 
     [JsonProperty("truncated")]
     public bool Truncated { get; set; }
+}
+
+public sealed class AssetGuidReferenceQueryDto
+{
+    [JsonProperty("guid")]
+    public string Guid { get; set; } = string.Empty;
+
+    [JsonProperty("maxResults")]
+    public int MaxResults { get; set; } = 500;
+
+    [JsonProperty("includePatterns")]
+    public string[]? IncludePatterns { get; set; }
+
+    [JsonProperty("excludePatterns")]
+    public string[]? ExcludePatterns { get; set; }
+}
+
+public sealed class AssetGuidReferenceItemDto
+{
+    [JsonProperty("fullPath")]
+    public string FullPath { get; set; } = string.Empty;
+
+    [JsonProperty("relativePath")]
+    public string RelativePath { get; set; } = string.Empty;
+
+    [JsonProperty("assetKind")]
+    public AssetKind AssetKind { get; set; }
+
+    [JsonProperty("line")]
+    public int Line { get; set; }
+
+    [JsonProperty("startCharacter")]
+    public int StartCharacter { get; set; }
+
+    [JsonProperty("endCharacter")]
+    public int EndCharacter { get; set; }
+}
+
+public sealed class AssetGuidReferenceResultDto
+{
+    [JsonProperty("references")]
+    public AssetGuidReferenceItemDto[] References { get; set; } = Array.Empty<AssetGuidReferenceItemDto>();
+
+    [JsonProperty("truncated")]
+    public bool Truncated { get; set; }
+}
+
+public sealed class AssetReferencedGuidQueryDto
+{
+    [JsonProperty("assetPath")]
+    public string AssetPath { get; set; } = string.Empty;
+}
+
+public sealed class AssetReferencedGuidItemDto
+{
+    [JsonProperty("guid")]
+    public string Guid { get; set; } = string.Empty;
+
+    [JsonProperty("line")]
+    public int Line { get; set; }
+
+    [JsonProperty("startCharacter")]
+    public int StartCharacter { get; set; }
+
+    [JsonProperty("endCharacter")]
+    public int EndCharacter { get; set; }
+
+    [JsonProperty("occurrenceCount")]
+    public int OccurrenceCount { get; set; }
+
+    [JsonProperty("resolvedPath")]
+    public string? ResolvedPath { get; set; }
+
+    [JsonProperty("resolvedKind")]
+    public AssetKind? ResolvedKind { get; set; }
+
+    [JsonProperty("inPackageCache")]
+    public bool InPackageCache { get; set; }
+}
+
+public sealed class AssetReferencedGuidResultDto
+{
+    [JsonProperty("references")]
+    public AssetReferencedGuidItemDto[] References { get; set; } = Array.Empty<AssetReferencedGuidItemDto>();
 }
 
 public sealed class AssetRenameQueryDto

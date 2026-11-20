@@ -25,6 +25,14 @@ public interface IAssetDataService
     [JsonRpcMethod("assetd/findReferences", UseSingleObjectParameterDeserialization = true)]
     Task<AssetReferenceResultDto> FindReferencesAsync(AssetReferenceQueryDto query, CancellationToken ct = default);
 
+    [JsonRpcMethod("assetd/getGuidReferences", UseSingleObjectParameterDeserialization = true)]
+    Task<AssetGuidReferenceResultDto> GetGuidReferencesAsync(AssetGuidReferenceQueryDto query, CancellationToken ct = default) =>
+        Task.FromResult(new AssetGuidReferenceResultDto());
+
+    [JsonRpcMethod("assetd/getReferencedGuids", UseSingleObjectParameterDeserialization = true)]
+    Task<AssetReferencedGuidResultDto> GetReferencedGuidsAsync(AssetReferencedGuidQueryDto query, CancellationToken ct = default) =>
+        Task.FromResult(new AssetReferencedGuidResultDto());
+
     [JsonRpcMethod("assetd/computeRenameEdits", UseSingleObjectParameterDeserialization = true)]
     Task<AssetWorkspaceEditDto> ComputeRenameEditsAsync(AssetRenameQueryDto query, CancellationToken ct = default);
 

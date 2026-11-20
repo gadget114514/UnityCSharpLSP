@@ -36,6 +36,13 @@ LLM / AI AGENT INTEGRATION (OpenCode, Claude Code, Cursor, etc.):
   Replace <path/to/UnityCSharpLSP.Server.exe> with the actual binary path (or just the exe name if on PATH).
   Alternatively, run `UnityCSharpLSP.Server --print-config` to auto-generate this with your resolved path.
 
+GLOB FILTERS FOR FIND REFERENCES:
+  textDocument/references accepts optional ""includePatterns"" / ""excludePatterns"" string arrays
+  beside the standard params. Patterns without '/' match the file name (""*.cs"", ""Something*.cs"",
+  ""*.asset""); '**' spans directories, a leading '~' matches a path substring (e.g. ""~Weapon""),
+  and a leading '!' negates a pattern. The same fields are
+  accepted by unitycsharp.findSymbolUsagesInAssets and unitycsharp.findGuidReferences.
+
 NOTES:
   - stdout is reserved for LSP JSON-RPC; diagnostics go to stderr.
   - Multi-root workspaces supported (multiple workspaceFolders in initialize).

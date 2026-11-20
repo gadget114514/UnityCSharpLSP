@@ -6,7 +6,7 @@ internal static class Program
         lsp-refs - find C# symbol references via UnityCSharpLSP
 
         USAGE:
-          lsp-refs <file> <line> <col> [--workspace <path>]
+          lsp-refs <file> <line> <col> [--workspace <path>] [--include <glob>]... [--exclude <glob>]...
           lsp-refs --asset-daemon [--workspace <path>]   (resident mode)
           lsp-refs --help
 
@@ -18,6 +18,11 @@ internal static class Program
         OPTIONS:
           --workspace <path>   Unity project root. Default: nearest ancestor of <file>
                                containing Assets/ or ProjectSettings/, else the file's directory.
+          --include <glob>     Keep only references whose path matches the glob. Repeatable.
+                               Patterns without '/' match the file name (e.g. '*.cs', 'Something*.cs').
+                               '**' spans directories; a leading '~' matches a path substring
+                               (e.g. '~Weapon'); a leading '!' negates a pattern.
+          --exclude <glob>     Drop references whose path matches the glob. Repeatable.
           --asset-daemon       Resident mode: start a persistent Unity asset daemon and keep one
                                LSP server warm. Reads queries from stdin, one per line:
                                  <file> <line> <col>
@@ -54,6 +59,8 @@ internal static class Program
         string? workspaceArg = null;
         bool resident = false;
         var positional = new List<string>();
+        var includePatterns = new List<string>();
+        var excludePatterns = new List<string>();
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -62,6 +69,14 @@ internal static class Program
                 case "--workspace":
                     if (++i >= args.Length) return Fail("--workspace にはパスを指定してください。");
                     workspaceArg = args[i];
+                    break;
+                case "--include":
+                    if (++i >= args.Length) return Fail("--include には glob を指定してください。");
+                    includePatterns.AddRange(SplitPatterns(args[i]));
+                    break;
+                case "--exclude":
+                    if (++i >= args.Length) return Fail("--exclude には glob を指定してください。");
+                    excludePatterns.AddRange(SplitPatterns(args[i]));
                     break;
                 case "--asset-daemon":
                     resident = true;
@@ -134,20 +149,34 @@ internal static class Program
             }
             else
             {
-                failures += await RunQueryAsync(client, query, CancellationToken.None).ConfigureAwait(false);
+                failures += await RunQueryAsync(
+                    client,
+                    query,
+                    CancellationToken.None,
+                    includePatterns.ToArray(),
+                    excludePatterns.ToArray()).ConfigureAwait(false);
             }
         }
 
         if (resident)
         {
-            failures += await RunResidentLoopAsync(client).ConfigureAwait(false);
+            failures += await RunResidentLoopAsync(
+                client,
+                includePatterns.ToArray(),
+                excludePatterns.ToArray()).ConfigureAwait(false);
         }
 
         await client.ShutdownAsync(shutdownCts.Token).ConfigureAwait(false);
         return failures == 0 ? 0 : 1;
     }
 
-    private static async Task<int> RunResidentLoopAsync(LspRefsClient client)
+    private static string[] SplitPatterns(string value) =>
+        value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static async Task<int> RunResidentLoopAsync(
+        LspRefsClient client,
+        string[] includePatterns,
+        string[] excludePatterns)
     {
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -184,13 +213,23 @@ internal static class Program
                 continue;
             }
 
-            failures += await RunQueryAsync(client, query, cts.Token).ConfigureAwait(false);
+            failures += await RunQueryAsync(
+                client,
+                query,
+                cts.Token,
+                includePatterns,
+                excludePatterns).ConfigureAwait(false);
         }
 
         return failures;
     }
 
-    private static async Task<int> RunQueryAsync(LspRefsClient client, Query query, CancellationToken ct)
+    private static async Task<int> RunQueryAsync(
+        LspRefsClient client,
+        Query query,
+        CancellationToken ct,
+        string[]? includePatterns = null,
+        string[]? excludePatterns = null)
     {
         try
         {
@@ -205,7 +244,9 @@ internal static class Program
                 fullPath,
                 query.Line - 1,
                 query.Column - 1,
-                timeout.Token).ConfigureAwait(false);
+                timeout.Token,
+                includePatterns,
+                excludePatterns).ConfigureAwait(false);
             client.DidClose(fullPath);
 
             foreach (var (path, line) in references)

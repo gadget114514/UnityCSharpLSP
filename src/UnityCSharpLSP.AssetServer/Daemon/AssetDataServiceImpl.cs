@@ -1,4 +1,5 @@
 using System.Buffers.Text;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
 using UnityCSharpLSP.AssetServer.Contracts;
@@ -54,6 +55,9 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
     private readonly SemaphoreSlim _syncLock = new(1, 1);
     private readonly HierarchyCache _hierarchyCache = new();
     private readonly PackageCacheGuidIndex _packageCacheGuidIndex;
+    private readonly ConcurrentDictionary<string, CachedGuidOccurrences> _guidOccurrenceCache = new(PathComparer);
+
+    private sealed record CachedGuidOccurrences(long MtimeTicks, long Length, ScannedGuidOccurrence[] Occurrences);
 
     private volatile string _state = "Indexing";
     private bool _disposed;
@@ -95,12 +99,14 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
         foreach (string changedPath in changedPaths)
         {
             _hierarchyCache.Invalidate(changedPath);
+            _guidOccurrenceCache.TryRemove(changedPath, out _);
         }
     }
 
     private void OnWatcherFullRescanProcessed()
     {
         _hierarchyCache.Clear();
+        _guidOccurrenceCache.Clear();
     }
 
     /// <summary>
@@ -238,6 +244,117 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
             _ => new AssetReferenceResultDto(),
         };
 
+        result.Locations = result.Locations
+            .Where(location => GlobPatternMatcher.MatchesAny(location.RelativePath, query.IncludePatterns) &&
+                               !(query.ExcludePatterns is { Length: > 0 } &&
+                                 GlobPatternMatcher.MatchesAny(location.RelativePath, query.ExcludePatterns)))
+            .ToArray();
+
+        return Task.FromResult(result);
+    }
+
+    public Task<AssetGuidReferenceResultDto> GetGuidReferencesAsync(AssetGuidReferenceQueryDto query, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        ct.ThrowIfCancellationRequested();
+
+        var result = new AssetGuidReferenceResultDto();
+        if (query is null ||
+            !AssetGuid.TryParseHex(query.Guid, out AssetGuid targetGuid) ||
+            targetGuid.IsZero)
+        {
+            return Task.FromResult(result);
+        }
+
+        int maxResults = query.MaxResults > 0 ? Math.Min(query.MaxResults, int.MaxValue - 1) : 500;
+        var references = new List<AssetGuidReferenceItemDto>();
+
+        foreach (AssetNode node in _graph.Current.AssetsById.Values)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (node.Kind == AssetKind.CSharpScript || node.Kind == AssetKind.Unknown)
+            {
+                continue;
+            }
+
+            foreach (ScannedGuidOccurrence occurrence in GetGuidOccurrences(node.FullPath))
+            {
+                if (occurrence.Guid != targetGuid)
+                {
+                    continue;
+                }
+
+                references.Add(new AssetGuidReferenceItemDto
+                {
+                    FullPath = node.FullPath,
+                    RelativePath = node.RelativePath,
+                    AssetKind = node.Kind,
+                    Line = occurrence.Line,
+                    StartCharacter = occurrence.StartCharacter,
+                    EndCharacter = occurrence.EndCharacter,
+                });
+
+                if (references.Count >= maxResults)
+                {
+                    result.Truncated = true;
+                    break;
+                }
+            }
+
+            if (references.Count >= maxResults)
+            {
+                break;
+            }
+        }
+
+        result.References = references
+            .Where(item => GlobPatternMatcher.MatchesAny(item.RelativePath, query.IncludePatterns) &&
+                           !(query.ExcludePatterns is { Length: > 0 } &&
+                             GlobPatternMatcher.MatchesAny(item.RelativePath, query.ExcludePatterns)))
+            .OrderBy(item => item.RelativePath, PathComparer)
+            .ThenBy(item => item.Line)
+            .ToArray();
+        return Task.FromResult(result);
+    }
+
+    public Task<AssetReferencedGuidResultDto> GetReferencedGuidsAsync(AssetReferencedGuidQueryDto query, CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        ct.ThrowIfCancellationRequested();
+
+        var result = new AssetReferencedGuidResultDto();
+        string? fullPath = query is null ? null : ResolveExistingFilePath(query.AssetPath);
+        if (fullPath is null)
+        {
+            return Task.FromResult(result);
+        }
+
+        var byGuid = new Dictionary<AssetGuid, AssetReferencedGuidItemDto>();
+        foreach (ScannedGuidOccurrence occurrence in GetGuidOccurrences(fullPath))
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (!byGuid.TryGetValue(occurrence.Guid, out AssetReferencedGuidItemDto? item))
+            {
+                AssetEntryDto? target = ResolveAssetByGuid(occurrence.Guid);
+                item = new AssetReferencedGuidItemDto
+                {
+                    Guid = occurrence.Guid.ToHexString(),
+                    Line = occurrence.Line,
+                    StartCharacter = occurrence.StartCharacter,
+                    EndCharacter = occurrence.EndCharacter,
+                    ResolvedPath = target?.FullPath,
+                    ResolvedKind = target?.Kind,
+                    InPackageCache = target is null && _packageCacheGuidIndex.Contains(occurrence.Guid),
+                };
+                byGuid[occurrence.Guid] = item;
+            }
+
+            item.OccurrenceCount++;
+        }
+
+        result.References = byGuid.Values.OrderBy(item => item.Line).ToArray();
         return Task.FromResult(result);
     }
 
@@ -890,6 +1007,38 @@ public sealed class AssetDataServiceImpl : IAssetDataService, IDisposable
         {
             return null;
         }
+    }
+
+    private ScannedGuidOccurrence[] GetGuidOccurrences(string fullPath)
+    {
+        long mtimeTicks;
+        long length;
+        try
+        {
+            var info = new FileInfo(fullPath);
+            if (!info.Exists)
+            {
+                return Array.Empty<ScannedGuidOccurrence>();
+            }
+
+            mtimeTicks = info.LastWriteTimeUtc.Ticks;
+            length = info.Length;
+        }
+        catch (Exception)
+        {
+            return Array.Empty<ScannedGuidOccurrence>();
+        }
+
+        if (_guidOccurrenceCache.TryGetValue(fullPath, out CachedGuidOccurrences? cached) &&
+            cached.MtimeTicks == mtimeTicks &&
+            cached.Length == length)
+        {
+            return cached.Occurrences;
+        }
+
+        ScannedGuidOccurrence[] occurrences = FastUnityYamlScanner.ScanGuidOccurrences(fullPath).ToArray();
+        _guidOccurrenceCache[fullPath] = new CachedGuidOccurrences(mtimeTicks, length, occurrences);
+        return occurrences;
     }
 
     private static ScannedGuidOccurrence? FindGuidOccurrenceAt(string fullPath, int line, int character)

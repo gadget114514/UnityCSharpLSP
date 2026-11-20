@@ -151,6 +151,8 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 | `unitycsharp.showWorkspaceInfo` | なし | ワークスペース数・プロジェクト数・ドキュメント数の概要を返し、`window/showMessage` でも通知 |
 | `unitycsharp.getSceneOrPrefabHierarchy` | `{ path, maxDepth?, includeSerializedValues? }` | `.unity` / `.prefab` の GameObject・PrefabInstance・コンポーネント階層ツリー（`AssetHierarchyNodeDto[]`）を取得（`maxDepth` 既定 `16`、`includeSerializedValues` 既定 `true`） |
 | `unitycsharp.findSymbolUsagesInAssets` | `{ scriptGuid?, symbolName?, memberKind?, memberName?, includeTransitiveScenes?, maxResults? }` | 指定スクリプト（`scriptGuid` または `symbolName`）やメンバー（`Class` / `Field` / `Method`）の Prefab / Scene 内参照箇所を検索 |
+| `unitycsharp.findGuidReferences` | `{ guid, maxResults? }` | 指定 GUID を参照するアセットをオンデマンド走査して列挙（`AssetGuidReferenceResultDto`。`maxResults` 既定 500）。永続インデックスは増やさず、デーモン内の `(mtime, size)` 付きキャッシュを利用 |
+| `unitycsharp.listReferencedGuids` | `{ path }`（`assetPath` でも可） | 指定アセットが参照する GUID 一覧を返す（`AssetReferencedGuidResultDto`）。未解決 GUID も `resolvedPath: null` として含み、`occurrenceCount` と PackageCache 判定を付与 |
 | `unitycsharp.assetServerStatus` | `{ path?, projectRoot? }`（省略可） | AssetServer のインデックス状態・登録アセット数・DB パス (`DaemonStatusResponse`) を取得 |
 
 `initialize` では `executeCommandProvider.commands`、`workspace.fileOperations`、`workspaceSymbolProvider.resolveProvider: true`、`diagnosticProvider.workspaceDiagnostics: true`、`positionEncoding: "utf-16"` を広告します。
