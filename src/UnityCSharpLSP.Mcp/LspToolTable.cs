@@ -243,6 +243,25 @@ public static class LspToolTable
             Description: "LSP textDocument/prepareRename: check whether the symbol at a position can be renamed and return its range/placeholder." + DocNote,
             RequiredProperties: TextDocPositionRequired),
 
+        // Unity GUID (custom methods unitylsp/*; same tool names as UnityCSharpFastLSP)
+        new(
+            Name: "unity_guid_definition",
+            LspMethod: UnityGuidMethods.GuidDefinitionName,
+            ParamsType: typeof(GuidQueryParams),
+            ReadOnly: true,
+            Description: "Resolve a Unity asset GUID to its .meta file and asset. Pass 'guid' (32 hex chars) or 'asset' " +
+                         "(path of an asset, script or .meta; file:/// URI, absolute, or workspace-relative). Returns {guid, assetUri, meta: Location} or null.",
+            SchemaOverrideJson: GuidSchema(withMax: false)),
+        new(
+            Name: "unity_guid_references",
+            LspMethod: UnityGuidMethods.GuidReferencesName,
+            ParamsType: typeof(GuidQueryParams),
+            ReadOnly: true,
+            Description: "Find the scenes, prefabs, materials, ScriptableObjects, .meta and .asmdef/.asmref files that reference a Unity asset GUID. " +
+                         "Pass 'guid' or 'asset' (e.g. 'Assets/Scripts/Player.cs' to find where the MonoBehaviour is attached). " +
+                         "Each reference has uri, 0-based range, lineText, and for YAML the owning object's classId/objectFileId and the reference fileId.",
+            SchemaOverrideJson: GuidSchema(withMax: true)),
+
         // §4.2 Edit-proposal tools (return WorkspaceEdit / TextEdit[] only; do not modify files on disk)
         new(
             Name: "textDocument_rename",
@@ -364,4 +383,33 @@ public static class LspToolTable
             }
             """),
     };
+
+    private static string GuidSchema(bool withMax)
+    {
+        var maxResults = withMax
+            ? """
+              ,
+                "maxResults": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Maximum number of references to return (default 500)"
+                }
+              """
+            : string.Empty;
+        return $$"""
+            {
+              "type": "object",
+              "properties": {
+                "guid": {
+                  "type": "string",
+                  "description": "Unity asset GUID (32 hexadecimal characters). Either guid or asset is required."
+                },
+                "asset": {
+                  "type": "string",
+                  "description": "Asset, script or .meta path (file:/// URI, absolute, or workspace-relative). Used when guid is omitted."
+                }{{maxResults}}
+              }
+            }
+            """;
+    }
 }

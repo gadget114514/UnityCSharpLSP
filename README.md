@@ -149,6 +149,12 @@ Example (`workspace/executeCommand` arguments):
 { "command": "unitycsharp.listReferencedGuids", "arguments": [{ "path": "Assets/Prefabs/Player.prefab" }] }
 ```
 
+- **GUID definition / references (custom LSP methods, same names as UnityCSharpFastLSP)**: `unitylsp/guidDefinition` resolves a `guid` (or an `asset` path) to its `.meta` GUID position and asset, and `unitylsp/guidReferences` lists every scene, prefab, material, `.asset`, `.meta` and `.asmdef`/`.asmref` that references it. Exposed to MCP as `unity_guid_definition` / `unity_guid_references`.
+
+```json
+{ "method": "unitylsp/guidReferences", "params": { "asset": "Assets/Scripts/Player.cs", "maxResults": 100 } }
+```
+
 - **No Unity Editor required**: all of the above runs headlessly from YAML + C# metadata, so AI agents and CI can use it.
 
 ---

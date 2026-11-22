@@ -78,6 +78,7 @@ public sealed class LspJsonRpcSession : IDisposable
 
         // Workspace-level handlers
         _rpc.AddLocalRpcTarget(new ExecuteCommandHandler(() => _router, _rpc));
+        _rpc.AddLocalRpcTarget(new UnityGuidHandler(() => _router));
         _rpc.AddLocalRpcTarget(new ConfigurationHandler(_settings));
         _rpc.AddLocalRpcTarget(new FileOperationsHandler(manager));
 

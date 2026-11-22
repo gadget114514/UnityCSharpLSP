@@ -110,7 +110,7 @@ public sealed class McpBridgeTests
         {
             var tools = await client.ListToolsAsync();
             Assert.Equal(LspToolTable.All.Count, tools.Count);
-            Assert.Equal(38, tools.Count);
+            Assert.Equal(40, tools.Count);
 
             var expectedNames = new[]
             {
