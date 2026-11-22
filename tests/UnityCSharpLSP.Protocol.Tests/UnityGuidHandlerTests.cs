@@ -89,6 +89,34 @@ public sealed class UnityGuidHandlerTests
         }
     }
 
+    [Fact]
+    public async Task GuidReferences_WithPatterns_FiltersScannedFiles()
+    {
+        var (server, client, _) = await CreateInitializedSessionAsync();
+        try
+        {
+            var excluded = await client.InvokeWithParameterObjectAsync<JObject?>(
+                UnityGuidMethods.GuidReferencesName,
+                new { guid = PlayerControllerGuid, excludePatterns = new[] { "*.prefab" } });
+            Assert.NotNull(excluded);
+            Assert.DoesNotContain(
+                excluded!["references"]!.Children<JObject>(),
+                r => r["uri"]!.Value<string>()!.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
+
+            var included = await client.InvokeWithParameterObjectAsync<JObject?>(
+                UnityGuidMethods.GuidReferencesName,
+                new { guid = PlayerControllerGuid, includePatterns = new[] { "Assets/Prefabs/**" } });
+            Assert.NotNull(included);
+            var refs = included!["references"]!.Children<JObject>().ToList();
+            Assert.NotEmpty(refs);
+            Assert.All(refs, r => Assert.Contains("/Assets/Prefabs/", r["uri"]!.Value<string>()));
+        }
+        finally
+        {
+            await ShutdownAsync(server, client);
+        }
+    }
+
     private static async Task<(LspJsonRpcSession Server, JsonRpc Client, string DummyPath)> CreateInitializedSessionAsync()
     {
         var rootPath = GetDummyProjectPath();

@@ -81,6 +81,8 @@ public sealed class UnityGuidHandler
                     guid,
                     meta?.MetaPath,
                     @params?.MaxResults,
+                    @params?.IncludePatterns,
+                    @params?.ExcludePatterns,
                     ct),
                 ct).ConfigureAwait(false);
 

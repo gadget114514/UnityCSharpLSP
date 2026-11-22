@@ -27,6 +27,14 @@ public sealed class GuidQueryParams
 
     [JsonProperty("maxResults", NullValueHandling = NullValueHandling.Ignore)]
     public int? MaxResults { get; set; }
+
+    /// <summary>guidReferences only: glob patterns of files to scan (replaces the default text-asset extensions).</summary>
+    [JsonProperty("includePatterns", NullValueHandling = NullValueHandling.Ignore)]
+    public string[]? IncludePatterns { get; set; }
+
+    /// <summary>guidReferences only: glob patterns of files to skip.</summary>
+    [JsonProperty("excludePatterns", NullValueHandling = NullValueHandling.Ignore)]
+    public string[]? ExcludePatterns { get; set; }
 }
 
 public sealed class GuidDefinitionResult

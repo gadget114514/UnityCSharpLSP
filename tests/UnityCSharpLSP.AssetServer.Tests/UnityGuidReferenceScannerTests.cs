@@ -73,6 +73,33 @@ public sealed class UnityGuidReferenceScannerTests : IDisposable
     }
 
     [Fact]
+    public void FindReferences_IncludePatternsReplaceDefaultExtensions_ExcludeAlwaysApplies()
+    {
+        Write("Assets/A.prefab", $"m_Script: {{fileID: 1, guid: {Guid}, type: 3}}\n");
+        Write("Assets/Sub/B.prefab", $"m_Script: {{fileID: 1, guid: {Guid}, type: 3}}\n");
+        Write("Assets/Scripts/Loader.cs", $"var p = AssetDatabase.GUIDToAssetPath(\"{Guid}\");\n");
+        Write("Assets/A.asmdef", $"{{ \"references\": [\"GUID:{Guid}\"] }}\n");
+
+        // Default: .cs is not scanned.
+        var (defaults, _) = UnityGuidReferenceScanner.FindReferences(_root, Guid, null, null);
+        Assert.DoesNotContain(defaults, r => r.FullPath.EndsWith(".cs", StringComparison.Ordinal));
+        Assert.Equal(3, defaults.Count);
+
+        // includePatterns replace the extension list, so *.cs becomes searchable.
+        var (included, _) = UnityGuidReferenceScanner.FindReferences(
+            _root, Guid, null, null, includePatterns: ["*.cs", "*.prefab"], excludePatterns: ["Assets/Sub/**"]);
+        Assert.Equal(2, included.Count);
+        Assert.Single(included, r => r.FullPath.EndsWith("Loader.cs", StringComparison.Ordinal));
+        Assert.Single(included, r => r.FullPath.EndsWith(Path.Combine("Assets", "A.prefab"), StringComparison.Ordinal));
+
+        // excludePatterns alone narrow the default extension list.
+        var (excluded, _) = UnityGuidReferenceScanner.FindReferences(
+            _root, Guid, null, null, excludePatterns: ["*.asmdef"]);
+        Assert.Equal(2, excluded.Count);
+        Assert.All(excluded, r => Assert.EndsWith(".prefab", r.FullPath));
+    }
+
+    [Fact]
     public void FindReferences_RespectsMaxResults()
     {
         for (int i = 0; i < 5; i++)

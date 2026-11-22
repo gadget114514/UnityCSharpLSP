@@ -153,6 +153,7 @@ Example (`workspace/executeCommand` arguments):
 
 ```json
 { "method": "unitylsp/guidReferences", "params": { "asset": "Assets/Scripts/Player.cs", "maxResults": 100 } }
+{ "method": "unitylsp/guidReferences", "params": { "guid": "43c06344c1d574b42ab749d9a917edca", "includePatterns": ["*.prefab", "*.cs"], "excludePatterns": ["Library/PackageCache/**"] } }
 ```
 
 - **No Unity Editor required**: all of the above runs headlessly from YAML + C# metadata, so AI agents and CI can use it.

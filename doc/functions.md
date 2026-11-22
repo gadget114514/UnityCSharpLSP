@@ -181,11 +181,12 @@ UnityCSharpLSP.Server.exe --print-config --mcp --workspace D:/MyUnityProject
 | メソッド | MCP ツール | 引数 | 結果 |
 | :--- | :--- | :--- | :--- |
 | `unitylsp/guidDefinition` | `unity_guid_definition` | `{ guid? , asset? }` | `{ guid, assetUri, meta: Location }`（`.meta` 内の guid 値の位置とアセット本体）。見つからなければ `null` |
-| `unitylsp/guidReferences` | `unity_guid_references` | `{ guid?, asset?, maxResults? }` | `{ guid, assetUri, references: [{ uri, range, lineText, classId?, objectFileId?, fileId? }], truncated }` |
+| `unitylsp/guidReferences` | `unity_guid_references` | `{ guid?, asset?, maxResults?, includePatterns?, excludePatterns? }` | `{ guid, assetUri, references: [{ uri, range, lineText, classId?, objectFileId?, fileId? }], truncated }` |
 
 - `guid` は 32 桁 16 進。省略時は `asset`（アセット・スクリプト・`.meta` のパス。`file:///` URI / 絶対 / ワークスペース相対）の `.meta` から guid を求めます。
 - 定義は AssetServer の GUID 索引（PackageCache 含む）でアセットを引き、その `.meta` の `guid:` 行を返します。
-- 参照は呼び出しごとに `Assets/`・`Packages/`・`Library/PackageCache/` のテキストアセット（`.unity` `.prefab` `.asset` `.mat` `.anim` `.controller` ほか、`.meta`、`.asmdef`/`.asmref`）を並列バイト走査します。アセット自身の `.meta` は除外し、Binary 直列化のアセットは対象外です。`classId` / `objectFileId` は所属 YAML オブジェクト（`--- !u!<classId> &<objectFileId>`）、`fileId` は同じ行の `fileID:` です。
+- 参照は呼び出しごとに `Assets/`・`Packages/`・`Library/PackageCache/` のテキストアセット（`.unity` `.prefab` `.asset` `.mat` `.anim` `.controller` ほか、`.meta`、`.asmdef`/`.asmref`）を並列バイト走査します。アセット自身の `.meta` は除外し、Binary 直列化のアセットは対象外です。
+- `includePatterns` / `excludePatterns` はプロジェクトルート相対パスに対する glob（`textDocument/references` と同じ書式。`*.cs` のようにスラッシュなしはファイル名に一致、`**`、先頭 `!` で否定、先頭 `~` で部分一致）。`includePatterns` を指定すると既定の拡張子リストの代わりに使われるため、`["*.cs"]` で C# 内の GUID 文字列も検索できます。`excludePatterns` は常に適用されます（例: `["Library/PackageCache/**"]`）。`classId` / `objectFileId` は所属 YAML オブジェクト（`--- !u!<classId> &<objectFileId>`）、`fileId` は同じ行の `fileID:` です。
 - FastLSP の `--proxy` 構成では FastLSP はこの 2 メソッドを処理せず、そのまま UnityCSharpLSP へ転送します。
 
 `initialize` では `executeCommandProvider.commands`、`workspace.fileOperations`、`workspaceSymbolProvider.resolveProvider: true`、`diagnosticProvider.workspaceDiagnostics: true`、`positionEncoding: "utf-16"` を広告します。

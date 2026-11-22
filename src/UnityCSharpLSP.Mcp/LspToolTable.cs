@@ -259,6 +259,7 @@ public static class LspToolTable
             ReadOnly: true,
             Description: "Find the scenes, prefabs, materials, ScriptableObjects, .meta and .asmdef/.asmref files that reference a Unity asset GUID. " +
                          "Pass 'guid' or 'asset' (e.g. 'Assets/Scripts/Player.cs' to find where the MonoBehaviour is attached). " +
+                         "Optional includePatterns/excludePatterns glob arrays narrow or widen the files scanned. " +
                          "Each reference has uri, 0-based range, lineText, and for YAML the owning object's classId/objectFileId and the reference fileId.",
             SchemaOverrideJson: GuidSchema(withMax: true)),
 
@@ -393,6 +394,16 @@ public static class LspToolTable
                   "type": "integer",
                   "minimum": 0,
                   "description": "Maximum number of references to return (default 500)"
+                },
+                "includePatterns": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Optional glob patterns of files to scan, relative to the project root (e.g. [\"*.prefab\", \"Assets/Scenes/**\", \"*.cs\"]). Replaces the default text-asset extensions, so non-asset files such as *.cs can be searched."
+                },
+                "excludePatterns": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Optional glob patterns of files to skip (e.g. [\"Library/PackageCache/**\", \"*.meta\"])."
                 }
               """
             : string.Empty;

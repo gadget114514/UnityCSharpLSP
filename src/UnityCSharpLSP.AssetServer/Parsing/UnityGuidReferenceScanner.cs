@@ -71,7 +71,8 @@ public static class UnityGuidReferenceScanner
                 return null;
             }
 
-            using var reader = new StreamReader(metaPath, Encoding.UTF8);
+            using var stream = OpenShared(metaPath);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
             for (int lineNo = 0; lineNo < MetaHeadLines; lineNo++)
             {
                 string? line = reader.ReadLine();
@@ -115,16 +116,24 @@ public static class UnityGuidReferenceScanner
     /// Scans <c>Assets/</c>, <c>Packages/</c> and <c>Library/PackageCache/</c> under
     /// <paramref name="rootPath"/> (or the whole root when none exist) for <paramref name="guid"/>.
     /// The asset's own <c>.meta</c> (<paramref name="selfMetaPath"/>) is excluded.
+    /// Patterns use <see cref="GlobPatternMatcher"/> syntax against the root-relative path.
+    /// When <paramref name="includePatterns"/> is non-empty it replaces the default
+    /// <see cref="ReferenceExtensions"/> filter (so e.g. <c>*.cs</c> can be searched);
+    /// <paramref name="excludePatterns"/> always removes matching files.
     /// </summary>
     public static (List<GuidReferenceHit> References, bool Truncated) FindReferences(
         string rootPath,
         string guid,
         string? selfMetaPath,
         int? maxResults,
+        IReadOnlyList<string>? includePatterns = null,
+        IReadOnlyList<string>? excludePatterns = null,
         CancellationToken ct = default)
     {
         int limit = Math.Clamp(maxResults is > 0 ? maxResults.Value : DefaultMaxResults, 1, 100_000);
         string? selfMeta = selfMetaPath is null ? null : Path.GetFullPath(selfMetaPath);
+        bool hasInclude = includePatterns is { Count: > 0 };
+        bool hasExclude = excludePatterns is { Count: > 0 };
         var found = new ConcurrentBag<GuidReferenceHit>();
         int total = 0;
         bool truncated = false;
@@ -135,7 +144,22 @@ public static class UnityGuidReferenceScanner
             var options = new ParallelOptions { CancellationToken = ct };
             Parallel.ForEach(EnumerateFiles(rootPath), options, (path, state) =>
             {
-                if (!ReferenceExtensions.Contains(Path.GetExtension(path)))
+                if (hasInclude || hasExclude)
+                {
+                    string relative = Path.GetRelativePath(rootPath, path).Replace('\\', '/');
+                    if (hasExclude && GlobPatternMatcher.MatchesAny(relative, excludePatterns))
+                    {
+                        return;
+                    }
+
+                    if (hasInclude
+                            ? !GlobPatternMatcher.MatchesAny(relative, includePatterns)
+                            : !ReferenceExtensions.Contains(Path.GetExtension(path)))
+                    {
+                        return;
+                    }
+                }
+                else if (!ReferenceExtensions.Contains(Path.GetExtension(path)))
                 {
                     return;
                 }
@@ -175,7 +199,7 @@ public static class UnityGuidReferenceScanner
         byte[] bytes;
         try
         {
-            bytes = File.ReadAllBytes(path);
+            bytes = ReadAllBytesShared(path);
         }
         catch (IOException)
         {
@@ -309,6 +333,21 @@ public static class UnityGuidReferenceScanner
         }
 
         return digits == 0 ? null : (negative ? -value : value);
+    }
+
+    /// <summary>
+    /// Opens for reading without blocking other processes (e.g. the Unity Editor) from
+    /// writing, renaming or deleting the file while it is being scanned.
+    /// </summary>
+    private static FileStream OpenShared(string path) =>
+        new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1, FileOptions.SequentialScan);
+
+    private static byte[] ReadAllBytesShared(string path)
+    {
+        using FileStream stream = OpenShared(path);
+        using var buffer = new MemoryStream(stream.CanSeek ? (int)Math.Min(stream.Length, int.MaxValue) : 0);
+        stream.CopyTo(buffer);
+        return buffer.Length == buffer.Capacity ? buffer.GetBuffer() : buffer.ToArray();
     }
 
     private static IEnumerable<string> EnumerateFiles(string rootPath)
