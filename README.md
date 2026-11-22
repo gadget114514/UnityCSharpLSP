@@ -54,6 +54,12 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
 
 ---
 
+## Express Start with LLM
+install the package with adding to find the executable in PATH
+Talk to LLM, "find UnityCSharpLSP and read help"
+
+---
+
 ## 🖥️ CLI Usage
 
 Run `UnityCSharpLSP.Server --help` for the full option list (LLM-friendly).
