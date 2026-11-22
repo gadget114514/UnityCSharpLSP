@@ -104,10 +104,13 @@ public sealed class LspJsonRpcSession : IDisposable
         var roots = CollectWorkspaceRoots(@params, initializeParams);
         if (_router is null || roots.Count > 0)
         {
+            // Answer initialize right away; the workspace loads in the background and
+            // router accessors block requests until it is ready.
             var newRouter = new WorkspaceRouter();
-            newRouter.Initialize(roots);
-            _router?.Dispose();
+            newRouter.BeginInitialize(roots);
+            var oldRouter = _router;
             _router = newRouter;
+            oldRouter?.Dispose();
         }
 
         return new InitializeResult

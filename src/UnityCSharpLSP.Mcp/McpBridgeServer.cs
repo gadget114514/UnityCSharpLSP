@@ -21,6 +21,9 @@ public sealed class McpBridgeServer : IAsyncDisposable
     private readonly DocumentSyncTracker _syncTracker;
     private readonly TimeSpan _callTimeout;
     private readonly string _workspaceRoot;
+    private readonly object _initGate = new();
+    private readonly CancellationTokenSource _disposeCts = new();
+    private Task? _lspInitTask;
     private bool _disposed;
 
     public McpBridgeServer(
@@ -37,9 +40,61 @@ public sealed class McpBridgeServer : IAsyncDisposable
     public LspLoopbackClient LspClient => _lspClient;
     public DocumentSyncTracker SyncTracker => _syncTracker;
 
-    public async Task InitializeLspAsync(JToken? initialSettings = null, CancellationToken ct = default)
+    public Task InitializeLspAsync(JToken? initialSettings = null, CancellationToken ct = default)
     {
-        await _lspClient.InitializeAsync(new[] { _workspaceRoot }, initialSettings, ct).ConfigureAwait(false);
+        StartLspInitialization(initialSettings, ct);
+        return _lspInitTask!;
+    }
+
+    /// <summary>
+    /// Kicks off LSP <c>initialize</c> (which loads the Roslyn workspace) in the background so the
+    /// MCP handshake and <c>tools/list</c> can be answered immediately. Tool calls await completion.
+    /// </summary>
+    public void StartLspInitialization(JToken? initialSettings = null, CancellationToken ct = default)
+    {
+        lock (_initGate)
+        {
+            if (_lspInitTask is not null)
+            {
+                return;
+            }
+
+            var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _disposeCts.Token);
+            _lspInitTask = Task.Run(
+                async () =>
+                {
+                    try
+                    {
+                        await _lspClient.InitializeAsync(new[] { _workspaceRoot }, initialSettings, linked.Token)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        linked.Dispose();
+                    }
+                },
+                CancellationToken.None);
+        }
+    }
+
+    private async Task EnsureLspInitializedAsync(CancellationToken ct)
+    {
+        Task? init;
+        lock (_initGate)
+        {
+            init = _lspInitTask;
+        }
+
+        if (init is null)
+        {
+            StartLspInitialization(null, CancellationToken.None);
+            lock (_initGate)
+            {
+                init = _lspInitTask!;
+            }
+        }
+
+        await init.WaitAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -52,7 +107,10 @@ public sealed class McpBridgeServer : IAsyncDisposable
         CancellationToken ct = default)
     {
         await using var bridge = new McpBridgeServer(workspaceRoot, callTimeout);
-        await bridge.InitializeLspAsync(initialSettings, ct).ConfigureAwait(false);
+
+        // Do not block the MCP handshake on workspace loading: clients expect initialize /
+        // tools/list to answer immediately. Tool calls wait for LSP initialization instead.
+        bridge.StartLspInitialization(initialSettings, ct);
 
         var options = bridge.CreateServerOptions();
         await using var transport = new StdioServerTransport(options, NullLoggerFactory.Instance);
@@ -115,6 +173,11 @@ public sealed class McpBridgeServer : IAsyncDisposable
             }
 
             var callCt = timeoutCts.Token;
+
+            if (def.Kind != McpBridgeToolKind.CachedDiagnostics)
+            {
+                await EnsureLspInitializedAsync(callCt).ConfigureAwait(false);
+            }
 
             switch (def.Kind)
             {
@@ -241,8 +304,31 @@ public sealed class McpBridgeServer : IAsyncDisposable
         }
 
         _disposed = true;
+        _disposeCts.Cancel();
+
+        Task? init;
+        lock (_initGate)
+        {
+            init = _lspInitTask;
+        }
+
+        if (init is not null)
+        {
+            try
+            {
+                // Workspace loading is synchronous inside the LSP session and may not observe
+                // cancellation; don't hang shutdown waiting for it.
+                await init.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Initialization failure/cancellation/timeout is irrelevant during shutdown.
+            }
+        }
+
         _syncTracker.Dispose();
         await _lspClient.DisposeAsync().ConfigureAwait(false);
+        _disposeCts.Dispose();
     }
 
     private sealed class LspBridgeTool : McpServerTool
