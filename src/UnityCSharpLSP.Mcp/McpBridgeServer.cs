@@ -123,7 +123,7 @@ public sealed class McpBridgeServer : IAsyncDisposable
     /// </summary>
     public McpServerOptions CreateServerOptions()
     {
-        var version = typeof(McpBridgeServer).Assembly.GetName().Version?.ToString() ?? "0.5.0";
+        var version = typeof(McpBridgeServer).Assembly.GetName().Version?.ToString() ?? "0.5.1";
         var options = new McpServerOptions
         {
             ServerInfo = new Implementation
@@ -137,7 +137,10 @@ public sealed class McpBridgeServer : IAsyncDisposable
             },
             ServerInstructions =
                 "UnityCSharpLSP MCP bridge exposing LSP capabilities directly. " +
-                "All positions are 0-based (UTF-16). Document URIs accept file:/// URIs, absolute paths, or workspace-relative paths.",
+                "All positions are 0-based (UTF-16). Document URIs accept file:/// URIs, absolute paths, or workspace-relative paths. " +
+                "To find which scenes, prefabs or assets use a script or asset (e.g. before renaming or deleting a MonoBehaviour), " +
+                "call unity_guid_references with {\"asset\":\"Assets/Scripts/Player.cs\"} instead of grepping .meta GUIDs; " +
+                "to find what a 'guid: ...' in YAML points to, call unity_guid_definition.",
         };
 
         options.ToolCollection ??= new McpServerPrimitiveCollection<McpServerTool>();

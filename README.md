@@ -55,8 +55,10 @@ Powered by .NET 8 and Microsoft Roslyn, **UnityCSharpLSP** provides full C# code
 ---
 
 ## Express Start with LLM
-install the package with adding to find the executable in PATH
-Talk to LLM, "find UnityCSharpLSP and read help"
+
+1. Install with the Windows installer and keep **Add application directory to User PATH** checked, so an agent can find `UnityCSharpLSP.exe`.
+2. Tell the LLM: *"Find UnityCSharpLSP and read its help."* `UnityCSharpLSP.exe --help` explains how to register it (`--print-config` / `--print-config --mcp`) and how to call each tool.
+3. Ask Unity questions directly, for example *"Which prefabs and scenes use PlayerController.cs?"* or *"Is this material still used?"*. The agent should answer with `unity_guid_references` `{"asset": "Assets/Scripts/PlayerController.cs"}` instead of reading `.meta` files and grepping GUIDs. Ask it to run that check before renaming, moving or deleting a MonoBehaviour, ScriptableObject or asset.
 
 ---
 
@@ -149,7 +151,7 @@ Example (`workspace/executeCommand` arguments):
 { "command": "unitycsharp.listReferencedGuids", "arguments": [{ "path": "Assets/Prefabs/Player.prefab" }] }
 ```
 
-- **GUID definition / references (custom LSP methods, same names as UnityCSharpFastLSP)**: `unitylsp/guidDefinition` resolves a `guid` (or an `asset` path) to its `.meta` GUID position and asset, and `unitylsp/guidReferences` lists every scene, prefab, material, `.asset`, `.meta` and `.asmdef`/`.asmref` that references it. Exposed to MCP as `unity_guid_definition` / `unity_guid_references`.
+- **Where is a script or asset used? (custom LSP methods, same names as UnityCSharpFastLSP)**: `unitylsp/guidReferences` (MCP `unity_guid_references`) takes a script or asset path (or a raw `guid`), resolves its `.meta` GUID, and lists every scene, prefab, material, `.asset`, animator controller, `.meta` and `.asmdef`/`.asmref` that references it. Each hit includes the line text and the owning YAML object (`classId` / `objectFileId`, e.g. 114 = MonoBehaviour component). It is the call to make before renaming, moving or deleting a MonoBehaviour, ScriptableObject or asset. `unitylsp/guidDefinition` (MCP `unity_guid_definition`) answers the reverse question: what asset does a `guid: ...` point to? From a shell, use `scripts/lsp_exec.py --method unitylsp/guidReferences` in the agent skill.
 
 ```json
 { "method": "unitylsp/guidReferences", "params": { "asset": "Assets/Scripts/Player.cs", "maxResults": 100 } }
@@ -586,6 +588,13 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 ---
 
 ## 📝 Release Notes
+
+### v0.5.1
+
+- **🧭 Unity GUID methods**: new custom LSP methods `unitylsp/guidDefinition` (resolve a GUID, asset path or `.meta` path to its `.meta` guid position and asset URI) and `unitylsp/guidReferences` (byte-scan text assets under `Assets/`, `Packages/` and `Library/PackageCache/` per request, reporting line text, owning YAML classId/objectFileId and fileID). `guidReferences` accepts `includePatterns` / `excludePatterns` globs, and scans open files with full sharing so they never block the Unity Editor. Exposed over MCP as `unity_guid_definition` / `unity_guid_references`, and shares argument/result shapes with UnityCSharpFastLSP.
+- **🤝 FastLSP proxy integration**: implemented `unitylsp/*` methods are advertised in `capabilities.experimental.unitylsp.methods`, so UnityCSharpFastLSP's `--proxy` mode forwards them to this server.
+- **⚡ Faster startup**: LSP `initialize` and the MCP handshake (`tools/list`) now answer immediately while the Roslyn workspace loads in the background; other requests wait for the load instead of failing.
+- **📖 LLM guidance**: the MCP tool descriptions, MCP server instructions, `--help`, the `unitycsharplsp` agent skill and the README "Express Start with LLM" section now tell agents to use `unity_guid_references` for "which prefab/scene uses this script/asset?" and before renaming, moving or deleting assets, instead of grepping `.meta` GUIDs (same wording as UnityCSharpFastLSP). The skill's `lsp_exec.py` gains `--method` for calling `unitylsp/*` requests from a shell.
 
 ### v0.5.0
 

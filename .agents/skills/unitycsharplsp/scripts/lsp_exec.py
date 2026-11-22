@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run a UnityCSharpLSP workspace/executeCommand from the shell over LSP stdio."""
+"""Run a UnityCSharpLSP workspace/executeCommand (--command) or a custom LSP request
+such as unitylsp/guidReferences (--method) from the shell over LSP stdio."""
 
 import argparse
 import json
@@ -99,8 +100,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", default="UnityCSharpLSP.exe", help="server executable")
     parser.add_argument("--root", required=True, help="Unity project root")
-    parser.add_argument("--command", required=True, help="unitycsharp.* command name")
-    parser.add_argument("--args", default="{}", help="JSON object passed as arguments[0]")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--command", help="unitycsharp.* command name (workspace/executeCommand)")
+    target.add_argument("--method", help="LSP request method to call directly, e.g. unitylsp/guidReferences")
+    parser.add_argument(
+        "--args",
+        default="{}",
+        help="JSON object: arguments[0] for --command, the params object for --method",
+    )
     parser.add_argument("--timeout", type=float, default=120.0)
     options = parser.parse_args()
 
@@ -128,11 +135,14 @@ def main() -> int:
             options.timeout,
         )
         client.send("initialized", {})
-        response = client.request(
-            "workspace/executeCommand",
-            {"command": options.command, "arguments": [arguments]},
-            options.timeout,
-        )
+        if options.method:
+            response = client.request(options.method, arguments, options.timeout)
+        else:
+            response = client.request(
+                "workspace/executeCommand",
+                {"command": options.command, "arguments": [arguments]},
+                options.timeout,
+            )
     except (RuntimeError, TimeoutError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

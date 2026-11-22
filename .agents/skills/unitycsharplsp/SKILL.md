@@ -1,6 +1,6 @@
 ---
 name: unitycsharplsp
-description: Use UnityCSharpLSP to get C# plus Unity prefab/scene/material intelligence without the Unity Editor. Use this skill whenever the user mentions UnityCSharpLSP, asks to find or configure a C# language server for a Unity project, wants go-to-definition/references/rename across .cs and .prefab/.unity/.asset/.mat files, wants to inspect a prefab or scene hierarchy, wants to know which prefabs use a script or field, wants to resolve GUID references in either direction (which assets reference a GUID / which GUIDs an asset references), or says that an LLM "can't find" the language server. Also covers the MCP server mode (--mcp, tools named like textDocument_definition / workspace_executeCommand), the UnityCSharpLSP.exe alias, --print-config output, and the limits of prefab searching.
+description: Use UnityCSharpLSP to get C# plus Unity prefab/scene/material intelligence without the Unity Editor. Use this skill whenever the user mentions UnityCSharpLSP, asks to find or configure a C# language server for a Unity project, wants go-to-definition/references/rename across .cs and .prefab/.unity/.asset/.mat files, wants to inspect a prefab or scene hierarchy, wants to know which prefabs, scenes or assets use a script, field or asset (or whether an asset is still used, e.g. before renaming, moving or deleting a MonoBehaviour), wants to resolve GUID references in either direction (which assets reference a GUID / which GUIDs an asset references), or says that an LLM "can't find" the language server. Also covers the MCP server mode (--mcp, tools named like textDocument_definition / workspace_executeCommand / unity_guid_references), the UnityCSharpLSP.exe alias, --print-config output, and the limits of prefab searching. Also use it to find what a `guid:` in Unity YAML points to (unity_guid_definition), and instead of grepping .meta GUIDs by hand.
 ---
 
 # UnityCSharpLSP — Claude usage guide
@@ -106,7 +106,14 @@ settings, e.g. `{"propagateRenamesToAssets":true}`), `--timeout <sec>` (per call
    `propagateRenamesToAssets` is on.
 7. **Unity commands go through `workspace_executeCommand`** with the same `arguments[0]`
    as section 4: `{"command":"unitycsharp.getSceneOrPrefabHierarchy","arguments":[{"path":"Assets/Prefabs/Enemy.prefab","maxDepth":4}]}`.
-8. **Not exposed:** semantic tokens, folding/selection ranges, linked editing, inline
+8. **Before renaming, moving or deleting a MonoBehaviour / ScriptableObject class, its
+   script file, or any asset**, call `unity_guid_references` with `{"asset":"<that file>"}`.
+   C# references do not show the scenes, prefabs and assets that use it; this tool does.
+   Use it rather than reading the `.meta` and grepping for the GUID yourself: it is one call,
+   accepts the script path directly, skips binary assets, and reports which YAML object
+   (`classId` / `objectFileId`, e.g. 114 = MonoBehaviour) holds each reference.
+   `unity_guid_definition` `{"guid":"<32 hex>"}` tells you what a `guid: ...` line points to.
+9. **Not exposed:** semantic tokens, folding/selection ranges, linked editing, inline
    values, on-type formatting, `codeLens/resolve` (display-only features).
 
 ### Typical calls
@@ -119,7 +126,13 @@ settings, e.g. `{"propagateRenamesToAssets":true}`), `--timeout <sec>` (per call
 {"name":"textDocument_documentSymbol","arguments":{"textDocument":{"uri":"Assets/Prefabs/Enemy.prefab"}}}
 {"name":"textDocument_diagnostic","arguments":{"textDocument":{"uri":"Assets/Scripts/Player.cs"}}}
 {"name":"textDocument_prepareCallHierarchy","arguments":{"textDocument":{"uri":"Assets/Scripts/Player.cs"},"position":{"line":30,"character":17}}}
+{"name":"unity_guid_references","arguments":{"asset":"Assets/Scripts/Player.cs","includePatterns":["Assets/Scenes/**","*.prefab"]}}
+{"name":"unity_guid_definition","arguments":{"guid":"43c06344c1d574b42ab749d9a917edca"}}
 ```
+
+`unity_guid_references` / `unity_guid_definition` are the only tools not named after an LSP
+method: they call the custom methods `unitylsp/guidReferences` / `unitylsp/guidDefinition`
+(same names and shapes as UnityCSharpFastLSP). See rule 8 for when to call them.
 
 Hierarchy tools are two-step, as in LSP: pass an item returned by
 `textDocument_prepareCallHierarchy` as `{"item": <item>}` to `callHierarchy_incomingCalls`
@@ -135,7 +148,9 @@ returned `selectionRange.start`.
 | List prefabs/scenes that use a symbol, with GameObject + line + `propertyPath` | `unitycsharp.findSymbolUsagesInAssets` (see below) |
 | Read a prefab/scene as a compact GameObject/Component tree instead of raw YAML | `unitycsharp.getSceneOrPrefabHierarchy` (see below), or `textDocument/documentSymbol` on the opened asset |
 | Navigate a `guid:` line inside YAML to its asset or script | `textDocument/documentLink` / `definition` / `hover` on that line |
-| Which assets reference GUID X? | `unitycsharp.findGuidReferences` `{guid, maxResults?}` — on-demand YAML scan, no persistent index |
+| Which scenes / prefabs / assets use this script or asset? Is it still used? (before rename / move / delete) | MCP `unity_guid_references` `{asset}` (or LSP `unitylsp/guidReferences`) — pass the script/asset path; `includePatterns` / `excludePatterns` to scope |
+| What does a `guid:` value point to? | MCP `unity_guid_definition` `{guid}` (or LSP `unitylsp/guidDefinition`) |
+| Which assets reference GUID X? | `unity_guid_references` `{guid}`, or `unitycsharp.findGuidReferences` `{guid, maxResults?}` — on-demand YAML scan, no persistent index |
 | Which GUIDs does asset A reference? | `unitycsharp.listReferencedGuids` `{path}` — includes unresolved GUIDs (`resolvedPath: null`) |
 | Find assets by file name | `workspace/symbol` (matches asset names, not their contents) |
 | Search arbitrary text/values inside prefab YAML | **Not an LSP feature** — use `rg` / file read on the YAML directly |
@@ -149,7 +164,9 @@ AI agents exists only in `doc/prefabserver.md`; it is not implemented.
 
 Add top-level `includePatterns` / `excludePatterns` arrays to `textDocument/references`
 params. Both C# and YAML asset locations are filtered. The same fields work in
-`arguments[0]` of `unitycsharp.findSymbolUsagesInAssets` and `unitycsharp.findGuidReferences`.
+`arguments[0]` of `unitycsharp.findSymbolUsagesInAssets` and `unitycsharp.findGuidReferences`,
+and in the params of `unitylsp/guidReferences` / `unity_guid_references` (there,
+`includePatterns` replaces the default asset extensions, so `["*.cs"]` searches code too).
 
 - Patterns without `/` match the file name: `*.cs`, `Something*.cs`, `*.asset`.
 - `**` spans directories: `Assets/**/*.prefab`. A leading `!` negates a pattern.
@@ -205,8 +222,25 @@ Other commands exposed by `workspace/executeCommand` with no arguments:
 `unitycsharp.reloadWorkspace`, `unitycsharp.showWorkspaceInfo`.
 
 `--args` expects a JSON object matching the command's first `arguments` element.
-`fileID`, GUID, and asset paths are returned as-is; resolve GUIDs with `documentLink`
-or by reading the corresponding `.meta` file.
+`fileID`, GUID, and asset paths are returned as-is; resolve GUIDs with
+`unitylsp/guidDefinition` (MCP `unity_guid_definition`) or `documentLink`.
+
+The custom `unitylsp/*` methods are plain LSP requests, not `executeCommand`; call them
+with `--method` (then `--args` is the params object):
+
+```bash
+# Which scenes/prefabs/assets use Player.cs (MonoBehaviour attachments included)
+python .agents/skills/unitycsharplsp/scripts/lsp_exec.py \
+  --exe UnityCSharpLSP.exe --root D:/MyUnityProject \
+  --method unitylsp/guidReferences \
+  --args '{"asset":"Assets/Scripts/Player.cs","maxResults":100}'
+
+# What a GUID points to
+python .agents/skills/unitycsharplsp/scripts/lsp_exec.py \
+  --exe UnityCSharpLSP.exe --root D:/MyUnityProject \
+  --method unitylsp/guidDefinition \
+  --args '{"guid":"43c06344c1d574b42ab749d9a917edca"}'
+```
 
 ## 5. Build / refresh when needed
 

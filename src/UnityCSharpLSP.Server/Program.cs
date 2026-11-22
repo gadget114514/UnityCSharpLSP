@@ -61,6 +61,10 @@ MCP MODE (--mcp) RULES FOR LLM AGENTS:
   - Edit-type tools (textDocument_rename, textDocument_codeAction, textDocument_formatting,
     workspace_willRenameFiles, ...) only RETURN a WorkspaceEdit / TextEdit[]; nothing is written to disk.
     Apply the edits yourself (rename edits may include .prefab/.unity/.asset YAML files).
+  - ""Which prefab/scene uses this script?"", ""Is this asset still used?"", or before renaming, moving or
+    deleting a MonoBehaviour / ScriptableObject / asset: unity_guid_references {""asset"": ""Assets/Scripts/Player.cs""}.
+    Do not grep .meta GUIDs by hand. Narrow with includePatterns / excludePatterns ({""includePatterns"": [""Assets/Scenes/**""]}).
+    What a 'guid: ...' line in a prefab/scene points to: unity_guid_definition {""guid"": ""<32 hex>""}.
   - Unity commands go through workspace_executeCommand: {""command"": ""unitycsharp.findSymbolUsagesInAssets"",
     ""arguments"": [{""symbolName"": ""PlayerController""}]}.
   - lsp_reset closes all documents and reloads the workspace (use after large branch switches).
