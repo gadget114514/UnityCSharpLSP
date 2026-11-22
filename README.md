@@ -72,9 +72,9 @@ UnityCSharpLSP.Server --asset-daemon --project-root D:/MyUnityProject
 UnityCSharpLSP.Server --stdio --editor-path "C:/Program Files/Unity/Hub/Editor/2022.3.x/Editor"
 ```
 
-Options: `--stdio`, `--editor-path <path>`, `--print-config`, `--asset-daemon`, `--project-root <path>`, `--daemon-idle-minutes <n>` (0/negative disables; default 30).
+Options: `--stdio`, `--mcp`, `--workspace <path>`, `--settings <json>`, `--timeout <sec>`, `--editor-path <path>`, `--print-config`, `--asset-daemon`, `--project-root <path>`, `--daemon-idle-minutes <n>` (0/negative disables; default 30).
 
-Notes: stdout is reserved for LSP JSON-RPC (diagnostics go to stderr); multi-root workspaces supported; asset daemon auto-spawned by the LSP server when needed. Exit code 0 on success.
+Notes: stdout is reserved for LSP or MCP JSON-RPC (diagnostics go to stderr); multi-root workspaces supported; asset daemon auto-spawned by the LSP server when needed. Exit code 0 on success.
 
 ### `lsp-refs` — one-shot / resident references CLI
 
@@ -328,6 +328,34 @@ command = "<path/to/UnityCSharpLSP.Server.exe>"
 args = ["--stdio"]
 ```
 
+### 5. MCP Server (`--mcp` — Claude Code / MCP Clients)
+
+UnityCSharpLSP can also run as an **MCP (Model Context Protocol)** server over stdio (`--mcp`), exposing LSP features directly as MCP tools (tool name = LSP method with `/` replaced by `_`, e.g. `textDocument_hover`, `textDocument_definition`, `textDocument_references`, `workspace_executeCommand`) while handling `initialize`, `file:///` URI/path normalization, and on-demand `didOpen` / `didChange` document synchronization automatically.
+
+Generate an `mcpServers` configuration snippet for your workspace:
+
+```bash
+UnityCSharpLSP.Server.exe --print-config --mcp --workspace D:/MyUnityProject
+```
+
+Example output:
+
+```json
+{
+  "mcpServers": {
+    "unity-csharp-lsp": {
+      "command": "<path/to/UnityCSharpLSP.Server.exe>",
+      "args": ["--mcp", "--workspace", "D:/MyUnityProject"]
+    }
+  }
+}
+```
+
+- **Workspace detection**: If `--workspace` is omitted, the nearest ancestor of the current directory containing `Assets/` or `ProjectSettings/` is used (falling back to CWD).
+- **Positions & URIs**: All LSP positions are **0-based (UTF-16)** (`line`, `character`). `textDocument.uri` accepts `file:///...` URIs, absolute paths, or workspace-relative paths.
+- **Document sync & reset**: Files are opened (`didOpen`) on first access and re-synced (`didChange`) automatically when disk `mtime` or size changes. Use `lsp_reset` to close all tracked documents and reload the workspace, or `lsp_diagnostics_cached` to read cached `textDocument/publishDiagnostics`.
+- **Options**: `--settings <json>` sets initial `workspace/didChangeConfiguration` values; `--timeout <sec>` sets the per-call LSP timeout (default `120`, `<= 0` disables).
+
 ---
 
 ## ⚙️ CLI Options
@@ -337,8 +365,12 @@ UnityCSharpLSP.Server [options]
 
 Options:
   --stdio                        Use standard input/output for LSP JSON-RPC communication [default: True]
+  --mcp                          Run as an MCP (Model Context Protocol) server over stdio [default: False]
+  --workspace <workspace>        Unity project root directory for --mcp (defaults to nearest ancestor with Assets/ or ProjectSettings/, else CWD)
+  --settings <settings>          Initial JSON settings passed to workspace/didChangeConfiguration in --mcp mode
+  --timeout <timeout>            Per-call LSP timeout in seconds for --mcp mode (<= 0 disables timeout) [default: 120]
   --editor-path <editor-path>    Explicit path to the Unity Editor installation (optional)
-  --print-config                 Print LLM agent LSP configuration snippet (opencode.json format) to stdout and exit
+  --print-config                 Print LLM agent LSP configuration snippet (or mcpServers JSON with --mcp) to stdout and exit
   --asset-daemon                 Run as a persistent Unity asset data daemon over Named Pipe [default: False]
   --project-root <project-root>  Unity project root directory for --asset-daemon (defaults to current directory)
   --daemon-idle-minutes <int>    Idle shutdown timeout in minutes for --asset-daemon (<= 0 disables) [default: 30]
@@ -376,8 +408,12 @@ A complete list of the features and operations currently supported by UnityCShar
 | :--- | :--- |
 | `UnityCSharpLSP.Server.exe` | Starts the LSP server over stdio (default) |
 | `--stdio` | Communicates via JSON-RPC over standard input/output |
+| `--mcp` | Starts as an MCP (Model Context Protocol) server over stdio |
+| `--workspace <path>` | Target Unity project root for `--mcp` (defaults to nearest ancestor with `Assets/` or `ProjectSettings/`, else CWD) |
+| `--settings <json>` | Initial JSON settings for `workspace/didChangeConfiguration` in `--mcp` mode |
+| `--timeout <sec>` | Per-call LSP timeout in seconds for `--mcp` (`120` by default, `<= 0` disables) |
 | `--editor-path <path>` | Explicitly specifies the Unity Editor installation (auto-detected when omitted) |
-| `--print-config` | Prints an `opencode.json` configuration snippet for OpenCode and exits |
+| `--print-config` | Prints an `opencode.json` configuration snippet (or `mcpServers` JSON when combined with `--mcp`) and exits |
 | `--asset-daemon` | Starts as a per-project persistent Unity Asset Data Daemon over Named Pipe |
 | `--project-root <path>` | Target Unity project root for `--asset-daemon` (defaults to current working directory) |
 | `--daemon-idle-minutes <int>` | Idle shutdown timeout in minutes for `--asset-daemon` (`30` by default, `<= 0` disables) |
@@ -537,6 +573,12 @@ Sync mode: `TextDocumentSyncKind.Incremental`, position encoding: `utf-16`
 ---
 
 ## 📝 Release Notes
+
+### v0.5.0
+
+- **🤖 MCP server mode**: `UnityCSharpLSP.Server --mcp [--workspace <path>]` runs the server as an MCP (Model Context Protocol) server over stdio. Tools mirror LSP methods 1:1 (`textDocument/definition` → `textDocument_definition`), take the LSP params object unchanged, and return the LSP result JSON unchanged. The bridge handles `initialize`, opens/re-syncs documents from disk automatically, and accepts file paths (absolute or workspace-relative) for `textDocument.uri`. Positions stay LSP 0-based UTF-16. Edit-type tools (`rename`, `codeAction`, `formatting`, `willRenameFiles`, …) return edits without writing to disk. Extra tools: `lsp_reset`, `lsp_diagnostics_cached`. `--print-config --mcp` prints an `mcpServers` snippet; `--settings` and `--timeout` configure the bridge. Spec: `doc/mcp-csharp-lsp.md`.
+- **⚡ Completion caching**: C# completion keeps a small LRU cache of resolved symbols for `completionItem/resolve`, and prefab/scene asset completion results are cached for 5 seconds.
+- **📖 LLM guidance**: `--help` and the `unitycsharplsp` agent skill document the MCP calling rules (naming, 0-based positions, path handling, apply-it-yourself edits).
 
 ### v0.4.5
 

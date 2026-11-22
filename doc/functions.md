@@ -10,12 +10,33 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 | :--- | :--- |
 | `UnityCSharpLSP.Server.exe` | stdio で LSP サーバーを起動（デフォルト） |
 | `--stdio` | 標準入出力で JSON-RPC 通信を行う |
+| `--mcp` | stdio で MCP (Model Context Protocol) サーバーとして起動 |
+| `--workspace <path>` | `--mcp` 時の対象 Unity プロジェクトルート（省略時は CWD から `Assets/` または `ProjectSettings/` を持つ祖先、なければ CWD） |
+| `--settings <json>` | `--mcp` 起動時に `workspace/didChangeConfiguration` へ渡す初期 JSON 設定 |
+| `--timeout <int>` | `--mcp` 時の 1 呼び出しあたりの LSP タイムアウト（秒、デフォルト `120`、`0` 以下で無効） |
 | `--editor-path <path>` | Unity Editor のインストール先を明示指定（省略時は自動検出） |
-| `--print-config` | OpenCode 用の `opencode.json` 設定スニペットを出力して終了 |
+| `--print-config` | OpenCode 用の `opencode.json` 設定スニペット（`--mcp` 併用時は `mcpServers` JSON）を出力して終了 |
 | `--asset-daemon` | プロジェクト単位の常駐 Unity Asset Data Server（Named Pipe IPC）として起動 |
 | `--project-root <path>` | `--asset-daemon` 時の対象 Unity プロジェクトルート（省略時はカレントディレクトリ） |
 | `--daemon-idle-minutes <int>` | `--asset-daemon` のアイドル自動終了時間（分、デフォルト `30`、`0` 以下で無効） |
 | `--help` | ヘルプを表示 |
+
+### 設定例（MCP / Claude Code 等）
+
+```bash
+UnityCSharpLSP.Server.exe --print-config --mcp --workspace D:/MyUnityProject
+```
+
+```json
+{
+  "mcpServers": {
+    "unity-csharp-lsp": {
+      "command": "<path/to/UnityCSharpLSP.Server.exe>",
+      "args": ["--mcp", "--workspace", "D:/MyUnityProject"]
+    }
+  }
+}
+```
 
 ### 設定例（OpenCode）
 
@@ -193,6 +214,21 @@ UnityCSharpLSP が現在サポートしている機能と操作方法の一覧�
 
 ---
 
-## 8. 制約・既知の制限
+## 8. MCP サーバーモード (`--mcp`)
+
+`UnityCSharpLSP.Server --mcp` で、LSP 機能をそのまま MCP (Model Context Protocol) ツールとして公開する stdio ブリッジを起動します。
+
+| 項目 | 振る舞い |
+| :--- | :--- |
+| ツール命名 | LSP メソッド名の `/` を `_` に置換（例: `textDocument/hover` → `textDocument_hover`、`workspace/executeCommand` → `workspace_executeCommand`） |
+| 位置・URI | 位置は **LSP 準拠の 0-based / UTF-16**。`textDocument.uri` には `file:///` URI・絶対パス・ワークスペース相対パスを指定可能（内部で `file:///` に正規化） |
+| ドキュメント同期 | `textDocument.uri` を含む呼び出し前に未オープンならディスク内容で `didOpen`、オープン済みで mtime / サイズが変化していれば全文 `didChange` を自動送信 |
+| 読み取り・編集提案ツール | `textDocument_hover` / `definition` / `declaration` / `typeDefinition` / `implementation` / `references`（`includePatterns` / `excludePatterns` 対応）/ `documentSymbol` / `documentHighlight` / `signatureHelp` / `completion` / `completionItem_resolve` / `diagnostic` / `workspace_diagnostic` / `workspace_symbol` / `workspaceSymbol_resolve` / `prepareCallHierarchy` / `callHierarchy_*` / `prepareTypeHierarchy` / `typeHierarchy_*` / `codeLens` / `documentLink` / `inlayHint` / `moniker` / `prepareRename` / `rename` / `codeAction` / `codeAction_resolve` / `formatting` / `rangeFormatting` / `workspace_will*Files`（編集提案系は `WorkspaceEdit` / `TextEdit[]` を返すのみでディスクへは書き込まない） |
+| コマンド・設定・ブリッジ独自ツール | `workspace_executeCommand`（`command` の enum を `ExecuteCommandHandler.Commands` から生成）、`workspace_didChangeConfiguration`、`lsp_reset`（全ドキュメントを `didClose` して `unitycsharp.reloadWorkspace` を実行）、`lsp_diagnostics_cached`（受信済み `textDocument/publishDiagnostics` キャッシュを参照） |
+| 出力・エラー | 結果 JSON を `content[0].text`（オブジェクト時は `structuredContent` にも）で返却。LSP の `ResponseError` は MCP の `isError: true` + `{code, message}` として返却 |
+
+---
+
+## 9. 制約・既知の制限
 
 - 特になし。

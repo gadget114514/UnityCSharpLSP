@@ -3,6 +3,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.VisualStudio.LanguageServer.Protocol;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using StreamJsonRpc;
 using UnityCSharpLSP.AssetServer.Contracts;
@@ -19,9 +20,19 @@ namespace UnityCSharpLSP.Protocol.Handlers;
 public sealed class CompletionHandler
 {
     private const int MaxAssetHierarchyCompletionItems = 200;
+    private const int SymbolCacheCapacity = 6;
+    private const long AssetCompletionCacheTtlMs = 5_000;
 
     private readonly WorkspaceManagerProvider _workspaceManagerProvider;
     private readonly ClientCapabilityStore _clientCapabilities;
+
+    private readonly object _symbolCacheGate = new();
+    private readonly LinkedList<SymbolCacheEntry> _symbolCacheLru = new();
+    private readonly Dictionary<int, SymbolCacheEntry> _symbolCacheByKey = new();
+    private int _nextSymbolCacheKey;
+
+    private readonly object _assetCacheGate = new();
+    private readonly Dictionary<string, AssetCompletionCacheEntry> _assetCompletionCache = new(StringComparer.Ordinal);
 
     public CompletionHandler(
         WorkspaceManagerProvider workspaceManagerProvider,
@@ -31,9 +42,82 @@ public sealed class CompletionHandler
         _clientCapabilities = clientCapabilities;
     }
 
+    private sealed class SymbolCacheEntry
+    {
+        public SymbolCacheEntry(int key, Dictionary<string, ISymbol> symbols)
+        {
+            Key = key;
+            Symbols = symbols;
+        }
+
+        public int Key { get; }
+        public Dictionary<string, ISymbol> Symbols { get; }
+        public LinkedListNode<SymbolCacheEntry>? Node { get; set; }
+    }
+
+    private sealed class AssetCompletionCacheEntry
+    {
+        public required CompletionItem[] Items { get; init; }
+        public required long Timestamp { get; init; }
+    }
+
+    private sealed class SymbolCompletionData
+    {
+        [JsonProperty("k")]
+        public int Key { get; set; }
+
+        [JsonProperty("n")]
+        public string? Name { get; set; }
+    }
+
+    private int CacheSymbols(Dictionary<string, ISymbol> symbols)
+    {
+        lock (_symbolCacheGate)
+        {
+            int key = ++_nextSymbolCacheKey;
+            var entry = new SymbolCacheEntry(key, symbols);
+            entry.Node = _symbolCacheLru.AddFirst(entry);
+            _symbolCacheByKey[key] = entry;
+
+            while (_symbolCacheLru.Count > SymbolCacheCapacity)
+            {
+                var last = _symbolCacheLru.Last!.Value;
+                _symbolCacheLru.RemoveLast();
+                _symbolCacheByKey.Remove(last.Key);
+            }
+
+            return key;
+        }
+    }
+
+    private ISymbol? GetCachedSymbol(int key, string name)
+    {
+        lock (_symbolCacheGate)
+        {
+            if (!_symbolCacheByKey.TryGetValue(key, out var entry))
+            {
+                return null;
+            }
+
+            _symbolCacheLru.Remove(entry.Node!);
+            _symbolCacheLru.AddFirst(entry.Node!);
+            return entry.Symbols.TryGetValue(name, out var symbol) ? symbol : null;
+        }
+    }
+
+    private static readonly bool Profile = Environment.GetEnvironmentVariable("UCSLSP_PROFILE") == "1";
+
+    private static void P(string label, System.Diagnostics.Stopwatch sw, System.Diagnostics.Stopwatch total)
+    {
+        if (Profile) Console.Error.WriteLine($"PROF {label}: {sw.Elapsed.TotalMilliseconds:F2}ms (total {total.Elapsed.TotalMilliseconds:F2}ms)");
+        sw.Restart();
+    }
+
     [JsonRpcMethod(Methods.TextDocumentCompletionName, UseSingleObjectParameterDeserialization = true)]
     public async Task<CompletionItem[]?> Completion(CompletionParams @params, CancellationToken ct = default)
     {
+        var profTotal = System.Diagnostics.Stopwatch.StartNew();
+        var prof = System.Diagnostics.Stopwatch.StartNew();
         var ws = _workspaceManagerProvider(WorkspaceRouteHelper.GetFilePath(@params));
         if (ws is null || @params.TextDocument?.Uri is null || @params.Position is null)
         {
@@ -75,17 +159,22 @@ public sealed class CompletionHandler
 
         var root = await syntaxTree.GetRootAsync(ct).ConfigureAwait(false);
         var items = new List<CompletionItem>();
+        P("setup(text/tree/model/root)", prof, profTotal);
 
         if (SceneManagerCallHelper.TryGetSceneNameCompletionContext(root, semanticModel, position, ct, out _))
         {
+            P("sceneContextCheck", prof, profTotal);
             await AddBuildSceneCompletionsAsync(ws, items, ct).ConfigureAwait(false);
+            P("buildSceneCompletions", prof, profTotal);
             return items.Count > 0 ? items.ToArray() : null;
         }
+        P("sceneContextCheck(false)", prof, profTotal);
 
         if (IsGetComponentTypeArgumentPosition(root, position))
         {
             var componentTypes = new List<CompletionItem>();
             await AddAssetComponentTypeCompletionsAsync(ws, componentTypes, ct).ConfigureAwait(false);
+            P("componentTypeCompletions", prof, profTotal);
             return componentTypes.Count > 0 ? componentTypes.ToArray() : null;
         }
 
@@ -113,6 +202,7 @@ public sealed class CompletionHandler
         {
             // Normal scope completion: local variables, parameters, members, etc.
             var symbols = semanticModel.LookupSymbols(position);
+            P($"LookupSymbols(count={symbols.Length})", prof, profTotal);
             var seen = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var sym in symbols)
@@ -130,6 +220,7 @@ public sealed class CompletionHandler
                     Data = sym.GetDocumentationCommentId(),
                 });
             }
+            P($"scopeItems(count={items.Count})", prof, profTotal);
 
             // Check if cursor is inside a class declaration that inherits from MonoBehaviour
             var classDecl = token.Parent?.AncestorsAndSelf().OfType<ClassDeclarationSyntax>().FirstOrDefault();
@@ -139,11 +230,14 @@ public sealed class CompletionHandler
                 if (classSymbol is not null && MonoBehaviourMessages.InheritsFrom(classSymbol, "MonoBehaviour"))
                 {
                     AddMonoBehaviourMessages(items);
+                    P("monoBehaviourMessages", prof, profTotal);
                     await AddAssetGameObjectCompletionsAsync(ws, classSymbol, items, seen, ct).ConfigureAwait(false);
+                    P($"assetGameObjectCompletions(count={items.Count})", prof, profTotal);
                 }
             }
         }
 
+        P("done", prof, profTotal);
         return items.Count > 0 ? items.ToArray() : null;
     }
 
@@ -503,6 +597,8 @@ public sealed class CompletionHandler
             return;
         }
 
+        var ipcProf = System.Diagnostics.Stopwatch.StartNew();
+        var ipcTotal = System.Diagnostics.Stopwatch.StartNew();
         AssetReferenceResultDto references = await ws.AssetService.FindReferencesAsync(
             new AssetReferenceQueryDto
             {
@@ -512,6 +608,7 @@ public sealed class CompletionHandler
                 MaxResults = MaxAssetHierarchyCompletionItems,
             },
             ct).ConfigureAwait(false);
+        P($"  asset:FindReferences(locations={references.Locations.Length})", ipcProf, ipcTotal);
 
         int itemLimit = items.Count + MaxAssetHierarchyCompletionItems;
         var visitedPrefabs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -542,7 +639,9 @@ public sealed class CompletionHandler
             }
         }
 
+        P("  asset:prefabHierarchies", ipcProf, ipcTotal);
         AssetEntryDto[] scenes = await ws.AssetService.GetAssetsAsync(AssetKind.Scene, ct).ConfigureAwait(false);
+        P($"  asset:GetScenes(count={scenes.Length})", ipcProf, ipcTotal);
         var visitedScenes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (AssetEntryDto scene in scenes)
         {
@@ -572,6 +671,7 @@ public sealed class CompletionHandler
                 }
             }
         }
+        P("  asset:sceneHierarchies", ipcProf, ipcTotal);
     }
 
     private static void CollectPrefabGameObjectNames(

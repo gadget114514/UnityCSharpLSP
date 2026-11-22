@@ -1,6 +1,6 @@
 ---
 name: unitycsharplsp
-description: Use UnityCSharpLSP to get C# plus Unity prefab/scene/material intelligence without the Unity Editor. Use this skill whenever the user mentions UnityCSharpLSP, asks to find or configure a C# language server for a Unity project, wants go-to-definition/references/rename across .cs and .prefab/.unity/.asset/.mat files, wants to inspect a prefab or scene hierarchy, wants to know which prefabs use a script or field, wants to resolve GUID references in either direction (which assets reference a GUID / which GUIDs an asset references), or says that an LLM "can't find" the language server. Also covers the UnityCSharpLSP.exe alias, --print-config output, and the limits of prefab searching.
+description: Use UnityCSharpLSP to get C# plus Unity prefab/scene/material intelligence without the Unity Editor. Use this skill whenever the user mentions UnityCSharpLSP, asks to find or configure a C# language server for a Unity project, wants go-to-definition/references/rename across .cs and .prefab/.unity/.asset/.mat files, wants to inspect a prefab or scene hierarchy, wants to know which prefabs use a script or field, wants to resolve GUID references in either direction (which assets reference a GUID / which GUIDs an asset references), or says that an LLM "can't find" the language server. Also covers the MCP server mode (--mcp, tools named like textDocument_definition / workspace_executeCommand), the UnityCSharpLSP.exe alias, --print-config output, and the limits of prefab searching.
 ---
 
 # UnityCSharpLSP — Claude usage guide
@@ -57,6 +57,75 @@ Correct shape (the key is `extensions`, an array of file suffixes):
   reaching the server.
 - `--stdio` is the default mode. stdout is reserved for LSP JSON-RPC; diagnostics go
   to stderr, so never mix human-readable output into stdout.
+
+## 2b. MCP server mode (`--mcp`)
+
+The same binary is also an MCP server over stdio. Use it when the agent speaks MCP but
+has no LSP client (Claude Code, Cursor, etc.). Full specification: `doc/mcp-csharp-lsp.md`.
+
+```bash
+UnityCSharpLSP.exe --print-config --mcp --workspace D:/MyUnityProject
+```
+
+```json
+{
+  "mcpServers": {
+    "unity-csharp-lsp": {
+      "command": "<path>/UnityCSharpLSP.exe",
+      "args": ["--mcp", "--workspace", "D:/MyUnityProject"]
+    }
+  }
+}
+```
+
+Options: `--workspace <path>` (default: nearest ancestor of CWD with `Assets/` or
+`ProjectSettings/`), `--settings <json>` (initial `workspace/didChangeConfiguration`
+settings, e.g. `{"propagateRenamesToAssets":true}`), `--timeout <sec>` (per call, default 120).
+
+### Rules for calling the tools
+
+1. **Tool name = LSP method with `/` → `_`.** `textDocument/references` →
+   `textDocument_references`, `typeHierarchy/subtypes` → `typeHierarchy_subtypes`.
+2. **Arguments are the LSP params object, results are the LSP result JSON.** Nothing is
+   renamed or flattened. `null` means "nothing found". LSP errors return `isError: true`
+   with `{code, message}`.
+3. **Positions are 0-based, UTF-16.** Editor line 12, column 9 → `{"line": 11, "character": 8}`.
+   (`lsp-refs` on the CLI is 1-based; the MCP tools are not.)
+4. **`textDocument.uri` may be a path.** `file:///` URI, absolute path, or a path relative
+   to `--workspace` (not to the agent's CWD). Returned URIs are always `file:///`.
+5. **No document sync calls.** Files are opened from disk on first use and re-sent when
+   their mtime/size change. Edit with your normal file tools, then query again.
+   Call `lsp_reset` after large changes (branch switch, mass generation).
+   `lsp_diagnostics_cached` returns the last pushed diagnostics; use
+   `textDocument_diagnostic` / `workspace_diagnostic` for fresh ones.
+6. **Edit tools never write.** `textDocument_rename`, `textDocument_codeAction`,
+   `codeAction_resolve`, `textDocument_formatting`, `textDocument_rangeFormatting`,
+   `workspace_willRenameFiles` / `willCreateFiles` / `willDeleteFiles` return a
+   `WorkspaceEdit` / `TextEdit[]`. Apply them yourself, bottom-up per file so ranges stay
+   valid. A rename's edits can include `.prefab` / `.unity` / `.asset` YAML files when
+   `propagateRenamesToAssets` is on.
+7. **Unity commands go through `workspace_executeCommand`** with the same `arguments[0]`
+   as section 4: `{"command":"unitycsharp.getSceneOrPrefabHierarchy","arguments":[{"path":"Assets/Prefabs/Enemy.prefab","maxDepth":4}]}`.
+8. **Not exposed:** semantic tokens, folding/selection ranges, linked editing, inline
+   values, on-type formatting, `codeLens/resolve` (display-only features).
+
+### Typical calls
+
+```json
+{"name":"workspace_symbol","arguments":{"query":"PlayerController"}}
+{"name":"textDocument_definition","arguments":{"textDocument":{"uri":"Assets/Scripts/Enemy.cs"},"position":{"line":20,"character":15}}}
+{"name":"textDocument_references","arguments":{"textDocument":{"uri":"Assets/Scripts/Player.cs"},"position":{"line":11,"character":8},"context":{"includeDeclaration":true},"includePatterns":["*.prefab","*.unity"]}}
+{"name":"textDocument_hover","arguments":{"textDocument":{"uri":"Assets/Scripts/Player.cs"},"position":{"line":5,"character":14}}}
+{"name":"textDocument_documentSymbol","arguments":{"textDocument":{"uri":"Assets/Prefabs/Enemy.prefab"}}}
+{"name":"textDocument_diagnostic","arguments":{"textDocument":{"uri":"Assets/Scripts/Player.cs"}}}
+{"name":"textDocument_prepareCallHierarchy","arguments":{"textDocument":{"uri":"Assets/Scripts/Player.cs"},"position":{"line":30,"character":17}}}
+```
+
+Hierarchy tools are two-step, as in LSP: pass an item returned by
+`textDocument_prepareCallHierarchy` as `{"item": <item>}` to `callHierarchy_incomingCalls`
+(same for `typeHierarchy_supertypes` / `subtypes`). To find a position when you only
+know a name, call `workspace_symbol` or `textDocument_documentSymbol` first and use the
+returned `selectionRange.start`.
 
 ## 3. Choose the right query for the use case
 
