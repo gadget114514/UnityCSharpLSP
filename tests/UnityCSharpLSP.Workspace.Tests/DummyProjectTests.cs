@@ -21,7 +21,8 @@ public class DummyProjectTests
 
         Assert.Equal("17.3.0", deps["com.unity.render-pipelines.universal"]);
         Assert.Equal("1.0.0", deps["com.unity.modules.physics"]);
-        Assert.Equal(42, deps.Count);
+        Assert.Equal("1.4.8", deps["com.unity.entities"]);
+        Assert.Equal(43, deps.Count);
     }
 
     [Fact]
