@@ -14,6 +14,27 @@ public static class UnityGuidMethods
 
     /// <summary>Returns the text-asset locations (scenes, prefabs, .meta, .asmdef...) that reference a GUID.</summary>
     public const string GuidReferencesName = "unitylsp/guidReferences";
+
+    /// <summary>All <c>unitylsp/*</c> methods this server implements (advertised in <c>capabilities.experimental.unitylsp.methods</c>).</summary>
+    public static readonly string[] All = { GuidDefinitionName, GuidReferencesName };
+}
+
+/// <summary>
+/// <c>capabilities.experimental</c> payload. UnityCSharpFastLSP's proxy reads
+/// <c>experimental.unitylsp.methods</c> to decide which <c>unitylsp/*</c> methods to forward to this
+/// server instead of answering them itself.
+/// </summary>
+public sealed class UnityLspExperimentalCapabilities
+{
+    [JsonProperty("unitylsp")]
+    public UnityLspCapabilities Unitylsp { get; set; } = new();
+}
+
+/// <summary><c>capabilities.experimental.unitylsp</c>: the implemented <c>unitylsp/*</c> method names.</summary>
+public sealed class UnityLspCapabilities
+{
+    [JsonProperty("methods")]
+    public string[] Methods { get; set; } = UnityGuidMethods.All;
 }
 
 /// <summary>Either <see cref="Guid"/> (32 hex chars) or <see cref="Asset"/> (file URI / absolute / workspace-relative path).</summary>

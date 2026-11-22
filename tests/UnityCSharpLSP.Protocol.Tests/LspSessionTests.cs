@@ -67,6 +67,29 @@ public sealed class LspSessionTests
         Assert.Equal(0, exitCode);
     }
 
+    [Fact]
+    public async Task Initialize_AdvertisesUnityLspMethodsInExperimental()
+    {
+        var (server, client) = CreateSessionPair();
+        client.StartListening();
+
+        var result = await client.InvokeWithParameterObjectAsync<Newtonsoft.Json.Linq.JObject>(
+            Methods.InitializeName,
+            new InitializeParams { Capabilities = new ClientCapabilities() });
+
+        // UnityCSharpFastLSP's proxy routes unitylsp/* to this server based on this list.
+        var methods = result["capabilities"]?["experimental"]?["unitylsp"]?["methods"]?
+            .Select(m => (string?)m)
+            .ToArray();
+        Assert.NotNull(methods);
+        Assert.Contains(UnityCSharpLSP.Protocol.Models.UnityGuidMethods.GuidDefinitionName, methods!);
+        Assert.Contains(UnityCSharpLSP.Protocol.Models.UnityGuidMethods.GuidReferencesName, methods!);
+
+        await client.InvokeWithParameterObjectAsync<object?>(Methods.ShutdownName, new object());
+        await client.NotifyAsync(Methods.ExitName);
+        Assert.Equal(0, await server.WaitForExitAsync());
+    }
+
     private sealed class ClientCallbackTarget
     {
         private readonly TaskCompletionSource<PublishDiagnosticParams> _diagnosticsTcs;

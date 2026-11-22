@@ -185,6 +185,7 @@ public sealed class LspJsonRpcSession : IDisposable
                     WorkDoneProgress = true,
                 },
                 PositionEncoding = "utf-16",
+                Experimental = new UnityLspExperimentalCapabilities(),
                 Workspace = new WorkspaceServerCapabilities
                 {
                     FileOperations = new FileOperationOptions
